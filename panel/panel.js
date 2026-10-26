@@ -1,6 +1,7 @@
 import {
-  DEFAULT_CONTROLS, STALE_AFTER_MS,
-  getControls, setControls, getApiKey, getHistory, clearHistory, getNowPlaying, norm
+  DEFAULT_CONTROLS, STALE_AFTER_MS, CALLS_PER_HOUR,
+  getControls, setControls, getApiKey, getHistory, clearHistory, getNowPlaying, norm,
+  getSteeringOn, setSteeringOn, getPicks, getRecentCalls
 } from '../lib/state.js';
 
 const $ = (id) => document.getElementById(id);
@@ -236,7 +237,11 @@ function renderSteer() {
   $('driftSongsWrap').hidden = controls.driftMode !== 'gradual';
 }
 
-$('steer').addEventListener('input', (e) => { controls.steer = e.target.value; save(); });
+$('steer').addEventListener('input', (e) => {
+  controls.steer = e.target.value;
+  controls.steerSetAt = Date.now();
+  save();
+});
 document.querySelectorAll('input[name=drift]').forEach((r) =>
   r.addEventListener('change', (e) => {
     controls.driftMode = e.target.value;
@@ -297,6 +302,65 @@ function renderNowPlaying() {
   }
 }
 
+// ---- Picks -------------------------------------------------------------------
+
+let picks = await getPicks();
+const LOADING_STALE_MS = 120000;
+
+function ago(ts) {
+  const s = Math.round((Date.now() - ts) / 1000);
+  if (s < 45) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  return `${Math.round(s / 3600)} h ago`;
+}
+
+function renderPicks() {
+  const status = $('picksStatus');
+  // A "loading" left behind by a killed service worker shouldn't lock the button forever.
+  const stale = picks && picks.status === 'loading' && Date.now() - picks.startedAt > LOADING_STALE_MS;
+  const loading = picks && picks.status === 'loading' && !stale;
+  $('getPicks').disabled = loading;
+  $('getPicks').textContent = loading ? 'Picking…' : 'Get picks';
+  document.querySelector('.picks').classList.toggle('loading', loading);
+  status.classList.toggle('error', !!(picks && picks.status === 'error'));
+
+  if (!picks) {
+    status.textContent = 'Press Get picks, or turn Steering on to refresh picks as you change controls.';
+  } else if (stale) {
+    status.textContent = 'The last request was interrupted. Press Get picks to try again.';
+  } else if (loading) {
+    status.textContent = 'Asking Claude…';
+  } else if (picks.status === 'error') {
+    status.textContent = picks.error;
+  } else {
+    const parts = [picks.basedOn ? `After “${picks.basedOn.title}”` : 'Picked', ago(picks.updatedAt)];
+    if (picks.dropped) parts.push(`${picks.dropped} filtered out`);
+    status.textContent = parts.join(' · ');
+  }
+
+  const songs = (picks && picks.songs) || [];
+  $('picksList').replaceChildren(
+    ...songs.map((s) =>
+      h('li', {},
+        h('div', { class: 'pick-title' }, s.title),
+        h('div', { class: 'muted' }, [s.artist, s.album].filter(Boolean).join(' · ')),
+        s.reason ? h('div', { class: 'pick-reason' }, s.reason) : null))
+  );
+}
+
+async function renderCallInfo() {
+  const calls = await getRecentCalls();
+  const usage = picks && picks.usage;
+  const parts = [`API calls this hour: ${calls.length}/${CALLS_PER_HOUR}`];
+  if (usage) parts.push(`last: ${usage.input.toLocaleString()} in / ${usage.output.toLocaleString()} out tokens`);
+  $('callInfo').textContent = parts.join(' · ');
+}
+
+$('getPicks').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'getPicks' }));
+
+$('steeringOn').checked = await getSteeringOn();
+$('steeringOn').addEventListener('change', (e) => setSteeringOn(e.target.checked));
+
 // ---- History -----------------------------------------------------------------
 
 async function renderHistory(history) {
@@ -330,9 +394,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
     nowPlaying = changes.nowPlaying.newValue || null;
     renderNowPlaying();
   }
+  if (area === 'session' && changes.picks) {
+    picks = changes.picks.newValue || null;
+    renderPicks();
+    renderCallInfo();
+  }
   if (area === 'local') {
     if (changes.history) renderHistory(changes.history.newValue || []);
     if (changes.apiKey) renderKeyWarning();
+    if (changes.callLog) renderCallInfo();
+    if (changes.steeringOn) $('steeringOn').checked = !!changes.steeringOn.newValue;
     // Controls changed somewhere else (another panel window, later: presets).
     if (changes.controls && JSON.stringify(changes.controls.newValue) !== JSON.stringify(controls)) {
       controls = { ...structuredClone(DEFAULT_CONTROLS), ...(changes.controls.newValue || {}) };
@@ -343,10 +414,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 $('npArt').addEventListener('error', () => { $('npArt').hidden = true; });
 
-// Re-check staleness even when no messages arrive (tab closed, navigated away).
-setInterval(renderNowPlaying, 5000);
+// Re-check staleness even when no messages arrive (tab closed, navigated away), and refresh "x min ago".
+setInterval(() => { renderNowPlaying(); renderPicks(); renderCallInfo(); }, 5000);
 
 renderControls();
 renderNowPlaying();
 renderHistory();
 renderKeyWarning();
+renderPicks();
+renderCallInfo();

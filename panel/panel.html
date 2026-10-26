@@ -25,6 +25,19 @@
     </div>
   </section>
 
+  <section class="card picks" aria-labelledby="picksHeading">
+    <div class="picks-head">
+      <h2 id="picksHeading">Up next</h2>
+      <label class="switch" title="While on, picks refresh when you change a control">
+        <input type="checkbox" id="steeringOn" role="switch"><span class="track"></span><span>Steering</span>
+      </label>
+      <button id="getPicks" type="button" class="small">Get picks</button>
+    </div>
+    <p id="picksStatus" class="picks-status muted" role="status"></p>
+    <ol id="picksList" class="picks-list"></ol>
+    <div id="callInfo" class="call-info muted"></div>
+  </section>
+
   <details open>
     <summary>Genres</summary>
     <div id="genreList" class="rows"></div>
