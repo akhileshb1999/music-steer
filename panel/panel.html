@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Music Steer</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Music Steer</h1>
+    <span id="conn" class="conn" title="Connection to the YouTube Music tab"><span class="dot"></span><span id="connText">Not connected</span></span>
+  </header>
+
+  <div id="keyWarning" class="banner" hidden>
+    No Anthropic API key yet. <a href="#" id="openOptions2">Add it in Options</a>.
+  </div>
+
+  <section id="nowPlaying" class="card now">
+    <img id="npArt" alt="" hidden>
+    <div class="np-text">
+      <div class="label" id="npState">Now playing</div>
+      <div id="npTitle" class="np-title">Open music.youtube.com and play something</div>
+      <div id="npMeta" class="muted"></div>
+    </div>
+  </section>
+
+  <details open>
+    <summary>Genres</summary>
+    <div id="genreList" class="rows"></div>
+    <form id="genreAdd" class="add">
+      <input id="genreInput" list="genreSuggestions" placeholder="Add genre (e.g. hard rock)" autocomplete="off">
+      <button type="submit">Add</button>
+    </form>
+    <datalist id="genreSuggestions"></datalist>
+    <div class="sub">Exclude</div>
+    <div id="excludeGenres" class="chips"></div>
+  </details>
+
+  <details open>
+    <summary>Tone</summary>
+    <div id="sliders"></div>
+    <div class="era">
+      <span class="slider-name">Era</span>
+      <select id="eraFrom" aria-label="Era from"></select>
+      <span class="muted">to</span>
+      <select id="eraTo" aria-label="Era to"></select>
+    </div>
+  </details>
+
+  <details open>
+    <summary>Artists</summary>
+    <div class="sub">Steer toward <span class="muted">(add a note for which side of them you want)</span></div>
+    <div id="seedList" class="rows"></div>
+    <form id="seedAdd" class="add">
+      <input id="seedInput" placeholder="Add artist" autocomplete="off">
+      <button type="submit">Add</button>
+    </form>
+    <div class="sub">Avoid</div>
+    <div id="avoidArtists" class="chips"></div>
+  </details>
+
+  <details>
+    <summary>Albums</summary>
+    <div id="albumList" class="rows"></div>
+    <form id="albumAdd" class="add album-add">
+      <input id="albumTitle" placeholder="Album title" autocomplete="off">
+      <input id="albumArtist" placeholder="Artist" autocomplete="off">
+      <select id="albumMode" aria-label="How to use this album">
+        <option value="pull">Pull songs from it</option>
+        <option value="reference">Use as sound reference</option>
+      </select>
+      <button type="submit">Add</button>
+    </form>
+  </details>
+
+  <details open>
+    <summary>Steer</summary>
+    <textarea id="steer" rows="3" placeholder="e.g. drift toward softer 70s rock over the next 10 songs"></textarea>
+    <div class="drift">
+      <span class="slider-name">Drift</span>
+      <div class="seg" role="radiogroup" aria-label="Drift speed">
+        <label><input type="radio" name="drift" value="snap"> Snap</label>
+        <label><input type="radio" name="drift" value="gradual"> Gradual</label>
+      </div>
+      <label id="driftSongsWrap" class="muted">over <input id="driftSongs" type="number" min="2" max="30" step="1"> songs</label>
+    </div>
+  </details>
+
+  <details>
+    <summary>Recently played <span id="historyCount" class="muted"></span></summary>
+    <ol id="history" class="history"></ol>
+    <button id="clearHistory" type="button" class="ghost danger small">Clear history</button>
+  </details>
+
+  <footer>
+    <a href="#" id="openOptions">Options</a>
+    <span id="saved" class="muted"></span>
+    <button id="resetControls" type="button" class="ghost small">Reset controls</button>
+  </footer>
+
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

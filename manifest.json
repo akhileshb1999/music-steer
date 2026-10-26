@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Music Steer",
+  "version": "0.1.0",
+  "description": "Steer what plays next on YouTube Music with genre, tone and artist controls.",
+  "minimum_chrome_version": "116",
+  "permissions": ["sidePanel", "storage"],
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://api.anthropic.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "panel/panel.html"
+  },
+  "options_page": "options/options.html",
+  "action": {
+    "default_title": "Open Music Steer"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["content/ytm-adapter.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://music.youtube.com/*"],
+      "js": ["content/bridge.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
