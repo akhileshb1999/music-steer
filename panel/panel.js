@@ -470,7 +470,10 @@ function renderSteered() {
 async function renderCallInfo() {
   const [calls, library, ai] = await Promise.all([getRecentCalls(), getLibrary(), getAiSettings()]);
   const parts = [`${providerName(ai)} calls this hour: ${calls.length}/${CALLS_PER_HOUR}`];
-  if (steer.usage) parts.push(`last: ${steer.usage.input.toLocaleString()} in / ${steer.usage.output.toLocaleString()} out tokens`);
+  if (steer.usage) {
+    parts.push(`last: ${steer.usage.input.toLocaleString()} in / ${steer.usage.output.toLocaleString()} out tokens` +
+      (steer.usage.model ? ` (${steer.usage.model})` : ''));
+  }
   if (library && library.artists && library.artists.length) parts.push(`${library.artists.length} library artists known`);
   $('callInfo').textContent = parts.join(' · ');
 }

@@ -45,6 +45,7 @@ const listItem = (videoId, title, artist, type) => ({ musicResponsiveListItemRen
 const ytHeaders = [];
 const providerHits = { anthropic: 0, gemini: 0 };
 let geminiShapeOk = true;
+const geminiModels = [];
 let aiCalls = [];
 let given = 0;
 function nextSongs(count, payload) {
@@ -83,11 +84,16 @@ function check(name, cond, extra = '') { results.push([cond ? 'PASS' : 'FAIL', n
   await ctx.route('https://generativelanguage.googleapis.com/**', async (r) => {
     const req = r.request();
     if (req.method() !== 'POST') return r.fulfill({ status: 200, contentType: 'application/json', body: '{"name":"models/gemini-3.8-flash"}' });
-    providerHits.gemini++;
     const body = JSON.parse(req.postData());
+    geminiModels.push(req.url().match(/models\/([^:]+):/)[1]);
     geminiShapeOk = geminiShapeOk && req.headers()['x-goog-api-key'] === 'AIzaTEST' &&
-      body.generationConfig.responseMimeType === 'application/json' && !!body.generationConfig.responseSchema &&
-      /\/models\/gemini-3\.8-flash:generateContent$/.test(req.url());
+      body.generationConfig.responseMimeType === 'application/json' && !!body.generationConfig.responseSchema;
+    // The very first request gets the real-world "high demand" 503, to exercise the model fallback.
+    if (geminiModels.length === 1) {
+      return r.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: { code: 503, status: 'UNAVAILABLE',
+        message: 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.' } }) });
+    }
+    providerHits.gemini++;
     const payload = JSON.parse(body.contents[0].parts[0].text.split('\n\n').slice(1).join('\n\n'));
     aiCalls.push(payload);
     await sleep(400);
@@ -237,7 +243,10 @@ function check(name, cond, extra = '') { results.push([cond ? 'PASS' : 'FAIL', n
   await panel.click('#refresh');
   s = await waitSteer((x) => x.status === 'ok' && aiCalls.length > callsG, 40000);
   const gp = aiCalls[aiCalls.length - 1];
-  check('drift info + blended energy sent', gp.drift && gp.drift.of === 4 && gp.controls.energy.value === 20, JSON.stringify({ drift: gp.drift, energy: gp.controls.energy.value }));
+  // Energy blends from 20 toward 100 by songs played since the change (a song counts after 30 s of play).
+  const expected = gp.drift ? Math.round(20 + (100 - 20) * (gp.drift.step / 4)) : null;
+  check('drift info + blended energy sent', gp.drift && gp.drift.of === 4 && gp.drift.step < 4 && gp.controls.energy.value === expected,
+    JSON.stringify({ drift: gp.drift, energy: gp.controls.energy.value, expected }));
   check('panel shows drift progress', !(await panel.locator('#driftStatus').isHidden()), await panel.textContent('#driftStatus'));
 
   // ---- Presets
@@ -266,7 +275,10 @@ function check(name, cond, extra = '') { results.push([cond ? 'PASS' : 'FAIL', n
   await sleep(6000);
   if (process.env.SCREENSHOT) await panel.screenshot({ path: process.env.SCREENSHOT });
   check(`requests went only to ${PROVIDER}`, providerHits[PROVIDER] === aiCalls.length && providerHits[PROVIDER === 'gemini' ? 'anthropic' : 'gemini'] === 0, JSON.stringify(providerHits));
-  if (PROVIDER === 'gemini') check('Gemini request shape (key header, JSON schema, default model)', geminiShapeOk);
+  if (PROVIDER === 'gemini') {
+    check('Gemini request shape (key header, JSON schema)', geminiShapeOk);
+    check('busy default model falls back to the next free model', geminiModels[0] === 'gemini-3.8-flash' && geminiModels[1] === 'gemini-3.6-flash', geminiModels.slice(0, 3).join(' → '));
+  }
   check('usage line names the provider', (await panel.textContent('#callInfo')).startsWith(PROVIDER === 'gemini' ? 'Gemini calls' : 'Claude calls'), await panel.textContent('#callInfo'));
   check('no page errors', errors.length === 0, errors.join(' | '));
   console.log(`${PROVIDER} calls total:`, aiCalls.length, '| queue events:', (await ytm.evaluate(() => window.__events.length)));

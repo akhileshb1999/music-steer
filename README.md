@@ -3,7 +3,7 @@
 A Chrome extension (Manifest V3) for steering what plays next on YouTube Music (music.youtube.com). You set the direction in a side panel: genres with weights, tone sliders, seed and avoid artists, albums, and a free-text steer. An AI then picks songs, and the extension keeps 3–5 of them queued right after the current song.
 
 Two AI options, chosen in Options:
-- **Google Gemini** (default): free tier, using `gemini-3.8-flash`. Get a key at https://aistudio.google.com/apikey.
+- **Google Gemini** (default): free tier, using `gemini-3.8-flash`. If that model is busy or out of free quota, it automatically tries `gemini-3.6-flash`, `gemini-2.5-flash` and `gemini-3.5-flash-lite`. Get a key at https://aistudio.google.com/apikey.
 - **Claude** (Anthropic): paid, using `claude-sonnet-5-5`, about 5–10 cents per hour of listening. Get a key at https://console.anthropic.com.
 
 Plain JavaScript, HTML and CSS. No build step.
@@ -87,6 +87,7 @@ The status line in the "Up next" card says what went wrong.
 
 - **"Couldn't read the YouTube Music queue"**: click the player bar once to open the full player, then press Refresh.
 - **"Couldn't add songs to the YouTube Music queue"**: YouTube probably changed something. Automatic retries pause for 30 minutes (Refresh retries now). Run `tools/probe.js` (below) and look at the `playNext` section.
+- **"Gemini is busy right now"**: every free Gemini model was overloaded at that moment. These spikes are usually short, and steering retries every minute on its own.
 - **"Can't reach the YouTube Music tab"**: reload the tab. This happens after the extension is reloaded or updated.
 - Only one YouTube Music tab should be open while steering.
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRequest, parseResponse, requestPicks, testKey, DEFAULT_GEMINI_MODEL } from '../lib/gemini.js';
+import { buildRequest, parseResponse, requestPicks, testKey, modelChain, DEFAULT_GEMINI_MODEL, FALLBACK_MODELS } from '../lib/gemini.js';
 import { ApiError } from '../lib/api-error.js';
 
 const payload = { count: 3, controls: { energy: { value: 70 } } };
@@ -34,20 +34,44 @@ test('parseResponse reports blocks, truncation and bad JSON', () => {
   assert.throws(() => parseResponse({ candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'nope' }] } }] }), /not valid JSON/);
 });
 
-test('requestPicks sends the key header to the default model and retries once on 429', async (t) => {
+test('requestPicks sends the key header to the default model', async (t) => {
   const calls = [];
-  t.mock.method(globalThis, 'fetch', async (url, init) => {
-    calls.push({ url, init });
-    if (calls.length === 1) {
-      return new Response(JSON.stringify({ error: { code: 429, message: 'Resource exhausted', details: [{ retryDelay: '0.01s' }] } }), { status: 429 });
-    }
-    return ok(answer());
-  });
+  t.mock.method(globalThis, 'fetch', async (url, init) => { calls.push({ url, init }); return ok(answer()); });
   const r = await requestPicks('AIzaTEST', '', payload);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 1);
   assert.equal(calls[0].url, `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_GEMINI_MODEL}:generateContent`);
   assert.equal(calls[0].init.headers['x-goog-api-key'], 'AIzaTEST');
   assert.equal(r.songs[0].title, 'La Grange');
+  assert.equal(r.model, DEFAULT_GEMINI_MODEL);
+});
+
+const busy = () => new Response(JSON.stringify({ error: { code: 503, message: 'This model is currently experiencing high demand.', status: 'UNAVAILABLE' } }), { status: 503 });
+const quota = () => new Response(JSON.stringify({ error: { code: 429, message: 'Resource exhausted', details: [{ retryDelay: '30s' }] } }), { status: 429 });
+const modelOf = (url) => url.match(/models\/([^:]+):/)[1];
+
+test('a busy (503) or out-of-quota (429) model falls back to the next free model', async (t) => {
+  const tried = [];
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    tried.push(modelOf(url));
+    if (tried.length === 1) return busy();
+    if (tried.length === 2) return quota();
+    return ok(answer());
+  });
+  const r = await requestPicks('k', '', payload);
+  assert.deepEqual(tried, [DEFAULT_GEMINI_MODEL, ...FALLBACK_MODELS.slice(0, 2)]);
+  assert.equal(r.model, FALLBACK_MODELS[1]);
+});
+
+test('when every model is busy, the error says so and is retryable later', async (t) => {
+  let n = 0;
+  t.mock.method(globalThis, 'fetch', async () => { n++; return busy(); });
+  await assert.rejects(requestPicks('k', '', payload), (e) => e instanceof ApiError && /busy right now/.test(e.message) && e.retryable);
+  assert.equal(n, modelChain('').length, 'each model tried once, no waiting');
+});
+
+test('a chosen model is tried first and not repeated in the fallbacks', () => {
+  assert.deepEqual(modelChain('gemini-2.5-flash'), ['gemini-2.5-flash', 'gemini-3.6-flash', 'gemini-3.5-flash-lite']);
+  assert.deepEqual(modelChain(' models/gemini-3.8-flash '), [DEFAULT_GEMINI_MODEL, ...FALLBACK_MODELS]);
 });
 
 test('a bad key gives a clear message and is not retried', async (t) => {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Music Steer",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Steer what plays next on YouTube Music with genre, tone and artist controls.",
   "minimum_chrome_version": "116",
   "permissions": ["sidePanel", "storage", "alarms"],

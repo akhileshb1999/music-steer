@@ -83,9 +83,9 @@ async function askModel({ count, queued, skip }) {
     skipped: skip, libraryArtists: (library && library.artists) || [], count: count + SPARE_PICKS
   });
   await recordCall();
-  const { songs, usage } = await requestPicks(ai, payload);
+  const { songs, usage, model } = await requestPicks(ai, payload);
   await updateSteer({
-    usage: usage || null,
+    usage: usage ? { ...usage, model: model || null } : null,
     drift: eff.drift ? { step: eff.drift.step, of: eff.drift.of } : null
   });
   return filterPicks(songs, {
