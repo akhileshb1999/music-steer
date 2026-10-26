@@ -372,8 +372,19 @@
     return null;
   }
 
+  // Whether a menu item is in an open popup. offsetParent can't be used: YouTube Music's popup items have no
+  // layout box of their own (it reported 5 items in the page, none "visible"), so look at the dropdown instead.
+  function isShown(el) {
+    const dropdown = el.closest('tp-yt-iron-dropdown');
+    if (dropdown) {
+      if (typeof dropdown.opened === 'boolean') return dropdown.opened;
+      return dropdown.getAttribute('aria-hidden') !== 'true' && getComputedStyle(dropdown).display !== 'none';
+    }
+    return el.getClientRects().length > 0 || (typeof el.checkVisibility === 'function' && el.checkVisibility());
+  }
+
   function visibleMenuItems() {
-    return [...document.querySelectorAll('ytmusic-menu-service-item-renderer')].filter((el) => el.offsetParent !== null);
+    return [...document.querySelectorAll('ytmusic-menu-service-item-renderer')].filter(isShown);
   }
 
   function closeMenus() {
@@ -384,11 +395,11 @@
     (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', esc));
   }
 
-  async function openRowMenu(row) {
+  async function openRowMenu(row, until = () => visibleMenuItems().length > 0) {
     const button = row && row.querySelector(MENU_BUTTON);
     if (!button) return false;
     button.click();
-    return waitFor(() => visibleMenuItems().length > 0, 2500);
+    return waitFor(until, 3000);
   }
 
   function anyRow() {
@@ -399,7 +410,9 @@
   async function menuBehavior() {
     let b = findMenuBehavior();
     if (b) return b;
-    if (await openRowMenu(anyRow())) b = findMenuBehavior();
+    // Opening any menu creates the popup's menu items (they stay in the page afterwards).
+    await openRowMenu(anyRow(), () => !!findMenuBehavior());
+    b = findMenuBehavior();
     closeMenus();
     return b;
   }
@@ -465,8 +478,18 @@
 
   function diagnostics(attempts) {
     const q = readQueue();
+    const item = document.querySelector('ytmusic-menu-service-item-renderer');
+    const dropdown = item && item.closest('tp-yt-iron-dropdown');
     return {
       attempts,
+      menuItem: item ? {
+        display: getComputedStyle(item).display,
+        hasInst: !!item.inst,
+        hasData: !!dataOf(item),
+        inDropdown: !!dropdown,
+        dropdownOpened: dropdown ? dropdown.opened : null,
+        shown: isShown(item)
+      } : null,
       queue: { rows: q.rows.length, items: q.items.length, selectedIndex: q.selectedIndex, source: q.source },
       menuItemsInPage: document.querySelectorAll('ytmusic-menu-service-item-renderer').length,
       menuBehaviorFound: !!findMenuBehavior(),

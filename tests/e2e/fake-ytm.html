@@ -108,6 +108,8 @@ function openMenu(rowData) {
   const popup = document.createElement('ytmusic-menu-popup-renderer');
   for (const it of rowData.menu.menuRenderer.items) {
     const item = document.createElement('ytmusic-menu-service-item-renderer');
+    // Like the live page: the item element itself has no layout box (offsetParent is null).
+    item.style.display = 'contents';
     item.textContent = it.menuServiceItemRenderer.text.runs[0].text;
     item.data = structuredClone(it.menuServiceItemRenderer);
     const handleCommand = async (ep) => {
