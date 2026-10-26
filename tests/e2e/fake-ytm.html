@@ -1,0 +1,77 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Fake YTM</title></head><body>
+<ytmusic-app>
+  <ytmusic-player-bar-v2><div class="title"></div><div class="byline"></div></ytmusic-player-bar-v2>
+  <ytmusic-player-page><ytmusic-player-queue id="q"></ytmusic-player-queue></ytmusic-player-page>
+  <div id="movie_player"></div>
+</ytmusic-app>
+<script>
+document.cookie = 'SAPISID=fakesapisid; path=/';
+window.ytcfg = { get: (k) => ({
+  INNERTUBE_CONTEXT: { client: { clientName: 'WEB_REMIX', clientVersion: '1.20261020.10.00' } },
+  INNERTUBE_CLIENT_VERSION: '1.20261020.10.00', INNERTUBE_API_KEY: 'k', LOGGED_IN: true, SESSION_INDEX: '1', VISITOR_DATA: 'vis'
+})[k] };
+let itemCounter = 100;
+const rows = [];   // { videoId, title, artist, year, itemId, wrapper }
+function addRow(r, at) { const row = { itemId: String(itemCounter++), ...r }; if (at == null) rows.push(row); else rows.splice(at, 0, row); return row; }
+addRow({ videoId: 'prev1', title: 'Previous Song', artist: 'Old Band', year: 1999 });
+addRow({ videoId: 'cur0', title: 'Echoes', artist: 'Pink Floyd', year: 1971, wrapper: true });
+addRow({ videoId: 'user1', title: 'My Own Pick', artist: 'Me Band', year: 2001 });
+addRow({ videoId: 'auto1', title: 'Autoplay One', artist: 'Auto', year: 2010, wrapper: true });
+addRow({ videoId: 'auto2', title: 'Autoplay Two', artist: 'Auto', year: 2011 });
+let selected = 1;
+window.__events = [];
+function renderer(r, sel) {
+  return { videoId: r.videoId, title: { runs: [{ text: r.title }] }, shortBylineText: { runs: [{ text: r.artist }] },
+    longBylineText: { runs: [{ text: r.artist }, { text: ' • ' }, { text: 'Album' }, { text: ' • ' }, { text: String(r.year || 2000) }] },
+    selected: sel,
+    menu: { menuRenderer: { items: [
+      { menuServiceItemRenderer: { text: { runs: [{ text: 'Play next' }] }, serviceEndpoint: { queueAddEndpoint: { queueTarget: { videoId: r.videoId }, queueInsertPosition: 'INSERT_AFTER_CURRENT_VIDEO' } } } },
+      { menuServiceItemRenderer: { text: { runs: [{ text: 'Remove from queue' }] }, serviceEndpoint: { removeFromQueueEndpoint: { videoId: r.videoId, itemId: r.itemId } } } }
+    ] } } };
+}
+function render() {
+  const q = document.getElementById('q');
+  q.innerHTML = '';
+  rows.forEach((r, i) => {
+    const d = renderer(r, i === selected);
+    if (r.wrapper) {
+      const w = document.createElement('ytmusic-playlist-panel-video-wrapper-renderer');
+      const counterpart = renderer({ ...r, videoId: r.videoId + '-video' }, false);
+      w.data = { primaryRenderer: { playlistPanelVideoRenderer: d }, counterpart: [{ counterpartRenderer: { playlistPanelVideoRenderer: counterpart } }] };
+      for (const x of [d, counterpart]) { const el = document.createElement('ytmusic-player-queue-item'); el.data = x; w.appendChild(el); }
+      q.appendChild(w);
+    } else {
+      const el = document.createElement('ytmusic-player-queue-item'); el.data = d; q.appendChild(el);
+    }
+  });
+  const cur = rows[selected];
+  navigator.mediaSession.metadata = new MediaMetadata({ title: cur.title, artist: cur.artist, album: 'Album' });
+  navigator.mediaSession.playbackState = 'playing';
+  document.querySelector('ytmusic-player-bar-v2 .title').textContent = cur.title;
+  document.querySelector('ytmusic-player-bar-v2 .byline').textContent = `${cur.artist} • Album • ${cur.year}`;
+}
+document.getElementById('movie_player').getVideoData = () => ({ video_id: rows[selected].videoId, title: rows[selected].title });
+document.getElementById('q').getState = () => ({ queue: { items: rows.map(r => ({ playlistPanelVideoRenderer: renderer(r, false) })) } });
+window.__catalog = {};
+document.querySelector('ytmusic-app').addEventListener('yt-action', (e) => {
+  const d = e.detail;
+  if (!d || d.actionName !== 'yt-service-request') return;
+  const ep = d.args[1];
+  window.__events.push(Object.keys(ep)[0]);
+  setTimeout(() => {
+    if (ep.queueAddEndpoint) {
+      const id = ep.queueAddEndpoint.queueTarget.videoId;
+      const meta = window.__catalog[id] || { title: id, artist: '?' };
+      addRow({ videoId: id, title: meta.title, artist: meta.artist, year: 1975 }, selected + 1);
+    }
+    if (ep.removeFromQueueEndpoint) {
+      const i = rows.findIndex(r => r.itemId === ep.removeFromQueueEndpoint.itemId && r.videoId === ep.removeFromQueueEndpoint.videoId);
+      if (i >= 0) rows.splice(i, 1);
+    }
+    render();
+  }, 300);
+});
+window.__advance = () => { selected = Math.min(rows.length - 1, selected + 1); render(); };
+window.__queue = () => rows.map((r, i) => (i === selected ? '*' : '') + r.videoId);
+render();
+</script></body></html>

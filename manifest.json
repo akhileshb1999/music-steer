@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Music Steer",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "description": "Steer what plays next on YouTube Music with genre, tone and artist controls.",
   "minimum_chrome_version": "116",
-  "permissions": ["sidePanel", "storage"],
+  "permissions": ["sidePanel", "storage", "alarms"],
   "host_permissions": [
     "https://music.youtube.com/*",
     "https://api.anthropic.com/*"

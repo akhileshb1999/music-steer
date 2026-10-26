@@ -1,7 +1,8 @@
 import {
   DEFAULT_CONTROLS, STALE_AFTER_MS, CALLS_PER_HOUR,
   getControls, setControls, getApiKey, getHistory, clearHistory, getNowPlaying, norm,
-  getSteeringOn, setSteeringOn, getPicks, getRecentCalls
+  getSteeringOn, setSteeringOn, getSteer, getRecentCalls, getLibrary,
+  getDislikes, setDislikes, getPresets, setPresets
 } from '../lib/state.js';
 
 const $ = (id) => document.getElementById(id);
@@ -18,6 +19,23 @@ function h(tag, attrs = {}, ...children) {
   }
   for (const c of children.flat()) if (c != null) el.append(c);
   return el;
+}
+
+// Two-click confirm (native confirm() dialogs aren't reliable in side panels).
+function confirmClick(button, action) {
+  const label = button.textContent;
+  let armed = null;
+  button.addEventListener('click', () => {
+    if (armed) {
+      clearTimeout(armed);
+      armed = null;
+      button.textContent = label;
+      action();
+      return;
+    }
+    button.textContent = 'Click again to confirm';
+    armed = setTimeout(() => { armed = null; button.textContent = label; }, 3000);
+  });
 }
 
 const GENRE_SUGGESTIONS = [
@@ -268,11 +286,89 @@ function renderControls() {
   renderSteer();
 }
 
-$('resetControls').addEventListener('click', () => {
-  if (!confirm('Reset all controls to defaults?')) return;
+confirmClick($('resetControls'), () => {
   controls = structuredClone(DEFAULT_CONTROLS);
   save();
   renderControls();
+});
+
+// ---- Presets ---------------------------------------------------------------------
+
+let presets = await getPresets();
+
+function presetMsg(text) {
+  $('presetMsg').textContent = text;
+  setTimeout(() => { if ($('presetMsg').textContent === text) $('presetMsg').textContent = ''; }, 4000);
+}
+
+function renderPresets() {
+  const names = Object.keys(presets).sort((a, b) => a.localeCompare(b));
+  const current = $('presetSelect').value;
+  $('presetSelect').replaceChildren(
+    names.length ? null : h('option', { value: '' }, 'No presets yet'),
+    ...names.map((n) => h('option', { value: n }, n))
+  );
+  if (names.includes(current)) $('presetSelect').value = current;
+  $('presetLoad').disabled = $('presetDelete').disabled = !names.length;
+}
+
+$('presetSave').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('presetName').value.trim();
+  if (!name) return;
+  presets = { ...presets, [name]: structuredClone(controls) };
+  await setPresets(presets);
+  $('presetName').value = '';
+  renderPresets();
+  $('presetSelect').value = name;
+  presetMsg(`Saved “${name}”.`);
+});
+
+$('presetLoad').addEventListener('click', () => {
+  const name = $('presetSelect').value;
+  if (!presets[name]) return;
+  controls = { ...structuredClone(DEFAULT_CONTROLS), ...structuredClone(presets[name]), steerSetAt: Date.now() };
+  save();
+  renderControls();
+  presetMsg(`Loaded “${name}”.`);
+});
+
+confirmClick($('presetDelete'), async () => {
+  const name = $('presetSelect').value;
+  if (!presets[name]) return;
+  const { [name]: _, ...rest } = presets;
+  presets = rest;
+  await setPresets(presets);
+  renderPresets();
+  presetMsg(`Deleted “${name}”.`);
+});
+
+$('presetExport').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({ musicSteerPresets: 1, presets }, null, 2)], { type: 'application/json' });
+  const a = h('a', { href: URL.createObjectURL(blob), download: 'music-steer-presets.json' });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+$('presetImport').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    const incoming = data && data.presets && typeof data.presets === 'object' ? data.presets : null;
+    if (!incoming) throw new Error('not a Music Steer presets file');
+    const clean = {};
+    for (const [name, c] of Object.entries(incoming)) {
+      if (c && typeof c === 'object' && Array.isArray(c.genres)) clean[String(name).slice(0, 80)] = { ...structuredClone(DEFAULT_CONTROLS), ...c };
+    }
+    presets = { ...presets, ...clean };
+    await setPresets(presets);
+    renderPresets();
+    presetMsg(`Imported ${Object.keys(clean).length} preset(s).`);
+  } catch (err) {
+    presetMsg(`Import failed: ${err.message}`);
+  }
 });
 
 // ---- Now playing + connection ----------------------------------------------
@@ -289,8 +385,10 @@ function renderNowPlaying() {
     $('npTitle').textContent = 'Open music.youtube.com and play something';
     $('npMeta').textContent = '';
     $('npArt').hidden = true;
+    $('npDislike').hidden = true;
     return;
   }
+  $('npDislike').hidden = !fresh;
   $('npState').textContent = !fresh ? 'Last seen' : nowPlaying.playing ? 'Now playing' : 'Paused';
   $('npTitle').textContent = nowPlaying.title;
   $('npMeta').textContent = [nowPlaying.artist, nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ');
@@ -302,10 +400,11 @@ function renderNowPlaying() {
   }
 }
 
-// ---- Picks -------------------------------------------------------------------
+// ---- Steered queue ---------------------------------------------------------------
 
-let picks = await getPicks();
-const LOADING_STALE_MS = 120000;
+let steer = await getSteer();
+let steeringOn = await getSteeringOn();
+const WORKING_STALE_MS = 180000;
 
 function ago(ts) {
   const s = Math.round((Date.now() - ts) / 1000);
@@ -314,52 +413,114 @@ function ago(ts) {
   return `${Math.round(s / 3600)} h ago`;
 }
 
-function renderPicks() {
-  const status = $('picksStatus');
-  // A "loading" left behind by a killed service worker shouldn't lock the button forever.
-  const stale = picks && picks.status === 'loading' && Date.now() - picks.startedAt > LOADING_STALE_MS;
-  const loading = picks && picks.status === 'loading' && !stale;
-  $('getPicks').disabled = loading;
-  $('getPicks').textContent = loading ? 'Picking…' : 'Get picks';
-  document.querySelector('.picks').classList.toggle('loading', loading);
-  status.classList.toggle('error', !!(picks && picks.status === 'error'));
+function songRow(item) {
+  const queued = item.status === 'queued';
+  return h('li', { class: item.status },
+    h('div', {},
+      h('div', { class: 'badge' }, item.status === 'playing' ? 'Playing now' : 'Queued'),
+      h('div', { class: 'song-title' }, item.title),
+      h('div', { class: 'muted' }, [item.artist, item.album].filter(Boolean).join(' · ')),
+      item.reason ? h('div', { class: 'song-reason' }, item.reason) : null),
+    h('div', { class: 'song-actions' },
+      h('button', {
+        class: 'icon thumb', type: 'button', title: 'Thumbs down: remove it and steer away from songs like it',
+        'aria-label': `Thumbs down ${item.title}`,
+        onclick: () => chrome.runtime.sendMessage({ type: 'dislikeSteered', videoId: item.videoId })
+      }, '👎'),
+      queued ? h('button', {
+        class: 'icon', type: 'button', title: 'Remove from the queue', 'aria-label': `Remove ${item.title} from the queue`,
+        onclick: () => chrome.runtime.sendMessage({ type: 'removeSteered', videoId: item.videoId })
+      }, '✕') : null));
+}
 
-  if (!picks) {
-    status.textContent = 'Press Get picks, or turn Steering on to refresh picks as you change controls.';
+function renderSteered() {
+  const status = $('steerStatus');
+  const stale = steer.status === 'working' && Date.now() - steer.updatedAt > WORKING_STALE_MS;
+  const working = steer.status === 'working' && !stale;
+  const queued = steer.items.filter((i) => i.status === 'queued').length;
+
+  status.className = `steer-status ${working ? 'working' : steer.status === 'error' ? 'error' : 'muted'}`;
+  $('refresh').disabled = working;
+  if (!steeringOn) {
+    status.textContent = 'Steering is off. Turn it on (or press Refresh) to keep steered songs queued.';
+  } else if (working) {
+    status.textContent = steer.detail || 'Working…';
   } else if (stale) {
-    status.textContent = 'The last request was interrupted. Press Get picks to try again.';
-  } else if (loading) {
-    status.textContent = 'Asking Claude…';
-  } else if (picks.status === 'error') {
-    status.textContent = picks.error;
+    status.textContent = 'The last update was interrupted. It will retry shortly, or press Refresh.';
+  } else if (steer.status === 'error') {
+    status.textContent = steer.error;
+  } else if (steer.status === 'ok') {
+    status.textContent = `${queued} steered song${queued === 1 ? '' : 's'} queued` + (steer.filledAt ? ` · updated ${ago(steer.filledAt)}` : '');
   } else {
-    const parts = [picks.basedOn ? `After “${picks.basedOn.title}”` : 'Picked', ago(picks.updatedAt)];
-    if (picks.dropped) parts.push(`${picks.dropped} filtered out`);
-    status.textContent = parts.join(' · ');
+    status.textContent = 'Starting…';
   }
 
-  const songs = (picks && picks.songs) || [];
-  $('picksList').replaceChildren(
-    ...songs.map((s) =>
-      h('li', {},
-        h('div', { class: 'pick-title' }, s.title),
-        h('div', { class: 'muted' }, [s.artist, s.album].filter(Boolean).join(' · ')),
-        s.reason ? h('div', { class: 'pick-reason' }, s.reason) : null))
-  );
+  $('driftStatus').hidden = !(steeringOn && steer.drift && controls.driftMode === 'gradual');
+  if (steer.drift) $('driftStatus').textContent = `Drifting toward your new settings: song ${steer.drift.step + 1} of ${steer.drift.of}`;
+
+  $('steerList').replaceChildren(...steer.items.map(songRow));
+  if (!steer.items.length && steeringOn && steer.status !== 'working') {
+    $('steerList').append(h('li', { class: 'empty-msg' }, 'No steered songs queued yet.'));
+  }
+  $('steerNote').hidden = !steer.note;
+  $('steerNote').textContent = steer.note || '';
 }
 
 async function renderCallInfo() {
-  const calls = await getRecentCalls();
-  const usage = picks && picks.usage;
-  const parts = [`API calls this hour: ${calls.length}/${CALLS_PER_HOUR}`];
-  if (usage) parts.push(`last: ${usage.input.toLocaleString()} in / ${usage.output.toLocaleString()} out tokens`);
+  const [calls, library] = await Promise.all([getRecentCalls(), getLibrary()]);
+  const parts = [`Claude calls this hour: ${calls.length}/${CALLS_PER_HOUR}`];
+  if (steer.usage) parts.push(`last: ${steer.usage.input.toLocaleString()} in / ${steer.usage.output.toLocaleString()} out tokens`);
+  if (library && library.artists && library.artists.length) parts.push(`${library.artists.length} library artists known`);
   $('callInfo').textContent = parts.join(' · ');
 }
 
-$('getPicks').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'getPicks' }));
+$('refresh').addEventListener('click', async () => {
+  if (!steeringOn) await setSteeringOn(true);
+  chrome.runtime.sendMessage({ type: 'refresh' });
+});
 
-$('steeringOn').checked = await getSteeringOn();
+$('steeringOn').checked = steeringOn;
 $('steeringOn').addEventListener('change', (e) => setSteeringOn(e.target.checked));
+
+$('npDislike').addEventListener('click', async () => {
+  await chrome.runtime.sendMessage({ type: 'dislikeNowPlaying' });
+  $('npDislike').textContent = '✓';
+  setTimeout(() => { $('npDislike').textContent = '👎'; }, 1500);
+});
+
+// ---- Dislikes ------------------------------------------------------------------------
+
+let dislikes = await getDislikes();
+let dislikeSaveTimer = null;
+
+function renderDislikes() {
+  $('dislikeCount').textContent = dislikes.length ? `(${dislikes.length})` : '';
+  $('dislikeList').replaceChildren(
+    ...dislikes.map((d, i) =>
+      h('li', {},
+        h('span', { class: 'who' }, h('span', { class: 'name' }, d.title), h('span', { class: 'muted' }, ` · ${d.artist}`)),
+        h('input', {
+          value: d.reason || '', placeholder: 'Why? e.g. too slow', 'aria-label': `Reason for disliking ${d.title}`,
+          oninput: (e) => {
+            d.reason = e.target.value;
+            clearTimeout(dislikeSaveTimer);
+            dislikeSaveTimer = setTimeout(() => setDislikes(dislikes), 400);
+          }
+        }),
+        h('button', {
+          class: 'icon', type: 'button', title: 'Un-dislike', 'aria-label': `Remove ${d.title} from disliked`,
+          onclick: () => { dislikes.splice(i, 1); setDislikes(dislikes); renderDislikes(); }
+        }, '✕')))
+  );
+  if (!dislikes.length) $('dislikeList').append(h('li', { class: 'empty-msg' }, 'Nothing disliked yet. Use 👎 on a song.'));
+  $('clearDislikes').hidden = !dislikes.length;
+}
+
+confirmClick($('clearDislikes'), async () => {
+  dislikes = [];
+  await setDislikes([]);
+  renderDislikes();
+});
 
 // ---- History -----------------------------------------------------------------
 
@@ -373,10 +534,7 @@ async function renderHistory(history) {
   if (!recent.length) $('history').append(h('li', { class: 'muted empty' }, 'Nothing yet. Songs appear after 30 s of play.'));
 }
 
-$('clearHistory').addEventListener('click', async () => {
-  if (!confirm('Clear play history?')) return;
-  await clearHistory();
-});
+confirmClick($('clearHistory'), () => clearHistory());
 
 // ---- API key banner + options ------------------------------------------------
 
@@ -394,16 +552,25 @@ chrome.storage.onChanged.addListener((changes, area) => {
     nowPlaying = changes.nowPlaying.newValue || null;
     renderNowPlaying();
   }
-  if (area === 'session' && changes.picks) {
-    picks = changes.picks.newValue || null;
-    renderPicks();
+  if (area === 'session' && changes.steer) {
+    steer = { ...steer, ...(changes.steer.newValue || {}) };
+    renderSteered();
     renderCallInfo();
   }
   if (area === 'local') {
     if (changes.history) renderHistory(changes.history.newValue || []);
     if (changes.apiKey) renderKeyWarning();
-    if (changes.callLog) renderCallInfo();
-    if (changes.steeringOn) $('steeringOn').checked = !!changes.steeringOn.newValue;
+    if (changes.callLog || changes.library) renderCallInfo();
+    if (changes.steeringOn) {
+      steeringOn = !!changes.steeringOn.newValue;
+      $('steeringOn').checked = steeringOn;
+      renderSteered();
+    }
+    if (changes.presets) { presets = changes.presets.newValue || {}; renderPresets(); }
+    if (changes.dislikes && !document.activeElement.closest('#dislikeList')) {
+      dislikes = changes.dislikes.newValue || [];
+      renderDislikes();
+    }
     // Controls changed somewhere else (another panel window, later: presets).
     if (changes.controls && JSON.stringify(changes.controls.newValue) !== JSON.stringify(controls)) {
       controls = { ...structuredClone(DEFAULT_CONTROLS), ...(changes.controls.newValue || {}) };
@@ -415,11 +582,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
 $('npArt').addEventListener('error', () => { $('npArt').hidden = true; });
 
 // Re-check staleness even when no messages arrive (tab closed, navigated away), and refresh "x min ago".
-setInterval(() => { renderNowPlaying(); renderPicks(); renderCallInfo(); }, 5000);
+setInterval(() => { renderNowPlaying(); renderSteered(); renderCallInfo(); }, 5000);
 
 renderControls();
 renderNowPlaying();
 renderHistory();
 renderKeyWarning();
-renderPicks();
+renderSteered();
 renderCallInfo();
+renderPresets();
+renderDislikes();

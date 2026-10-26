@@ -23,20 +23,41 @@
       <div id="npTitle" class="np-title">Open music.youtube.com and play something</div>
       <div id="npMeta" class="muted"></div>
     </div>
+    <button id="npDislike" type="button" class="icon thumb" title="Thumbs down: steer away from songs like this" aria-label="Thumbs down the current song" hidden>👎</button>
   </section>
 
-  <section class="card picks" aria-labelledby="picksHeading">
-    <div class="picks-head">
-      <h2 id="picksHeading">Up next</h2>
-      <label class="switch" title="While on, picks refresh when you change a control">
+  <section class="card steer" aria-labelledby="steerHeading">
+    <div class="steer-head">
+      <h2 id="steerHeading">Up next</h2>
+      <label class="switch" title="While on, Music Steer keeps 3–5 steered songs queued after the current one">
         <input type="checkbox" id="steeringOn" role="switch"><span class="track"></span><span>Steering</span>
       </label>
-      <button id="getPicks" type="button" class="small">Get picks</button>
+      <button id="refresh" type="button" class="small" title="Replace the steered songs that haven't played yet">Refresh</button>
     </div>
-    <p id="picksStatus" class="picks-status muted" role="status"></p>
-    <ol id="picksList" class="picks-list"></ol>
+    <p id="steerStatus" class="steer-status muted" role="status"></p>
+    <p id="driftStatus" class="drift-status" hidden></p>
+    <ol id="steerList" class="steer-list"></ol>
+    <p id="steerNote" class="steer-note muted" hidden></p>
     <div id="callInfo" class="call-info muted"></div>
   </section>
+
+  <details id="presetsSection" open>
+    <summary>Presets</summary>
+    <div class="preset-row">
+      <select id="presetSelect" aria-label="Saved presets"></select>
+      <button id="presetLoad" type="button" class="small">Load</button>
+      <button id="presetDelete" type="button" class="small ghost danger">Delete</button>
+    </div>
+    <form id="presetSave" class="add">
+      <input id="presetName" placeholder="Save current controls as…" autocomplete="off">
+      <button type="submit">Save</button>
+    </form>
+    <div class="preset-io">
+      <button id="presetExport" type="button" class="small ghost">Export</button>
+      <label class="small ghost button-like">Import<input id="presetImport" type="file" accept="application/json,.json" hidden></label>
+      <span id="presetMsg" class="muted"></span>
+    </div>
+  </details>
 
   <details open>
     <summary>Genres</summary>
@@ -98,6 +119,14 @@
       </div>
       <label id="driftSongsWrap" class="muted">over <input id="driftSongs" type="number" min="2" max="30" step="1"> songs</label>
     </div>
+    <p class="hint muted">Snap replaces the queued steered songs as soon as you change something. Gradual keeps them and shifts the picks toward the new settings over the next N songs.</p>
+  </details>
+
+  <details>
+    <summary>Disliked <span id="dislikeCount" class="muted"></span></summary>
+    <p class="hint muted">Every request tells Claude to avoid these. Add a reason to steer away from songs like them too.</p>
+    <ul id="dislikeList" class="dislike-list"></ul>
+    <button id="clearDislikes" type="button" class="ghost danger small">Clear all</button>
   </details>
 
   <details>
