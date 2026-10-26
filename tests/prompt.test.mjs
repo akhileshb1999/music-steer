@@ -71,3 +71,25 @@ test('filterPicks drops repeats, avoided artists, duplicates and junk, then trim
   });
   assert.deepEqual(out.map((s) => s.title), ['Go With the Flow', 'Kashmir']);
 });
+
+test('payload carries the vibe slider and same-artist rules', () => {
+  const p = buildPayload({ controls: controls({ vibe: 80, maxPerArtist: 1, allowBackToBack: true }), nowPlaying: null, history: [], count: 5 });
+  assert.equal(p.controls.vibe.value, 80);
+  assert.match(p.controls.vibe.scale, /stay close to what is playing/);
+  assert.deepEqual(p.controls.same_artist, { max_upcoming: 1, back_to_back_allowed: true });
+});
+
+test('filterPicks enforces the per-artist limit, counting songs already queued', () => {
+  const songs = [
+    { title: 'Jessica', artist: 'The Allman Brothers Band' },
+    { title: 'Melissa', artist: 'The Allman Brothers Band' },
+    { title: 'Tush', artist: 'ZZ Top' },
+    { title: 'La Grange', artist: 'ZZ Top feat. Nobody' },
+    { title: 'Cheap Sunglasses', artist: 'ZZ Top, Someone' }
+  ];
+  const out = filterPicks(songs, {
+    nowPlaying: null, history: [], queued: [{ title: 'Statesboro Blues', artist: 'The Allman Brothers Band' }],
+    maxPerArtist: 2, count: 10
+  });
+  assert.deepEqual(out.map((s) => s.title), ['Jessica', 'Tush', 'La Grange']);
+});

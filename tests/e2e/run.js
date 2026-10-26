@@ -31,8 +31,11 @@ const POOL = [
   ['Hocus Pocus', 'Focus'], ['Frankenstein', 'The Edgar Winter Group'], ['Locomotive Breath', 'Jethro Tull'],
   ['Tush', 'ZZ Top'], ['Sweet Emotion', 'Aerosmith'], ['Long Train Runnin\'', 'The Doobie Brothers']
 ];
+// Songs only used by the scripted same-artist check (kept out of POOL so POOL's ids stay stable).
+const EXTRA = [['Wish You Were Here', 'Pink Floyd'], ['Melissa', 'The Allman Brothers Band'], ['Cheap Sunglasses', 'ZZ Top']];
 const catalog = {};
 POOL.forEach(([t, a], i) => { if (i !== 0) catalog[norm(`${t} ${a}`)] = { videoId: `v${i}`, title: t, artist: a }; });
+EXTRA.forEach(([t, a], i) => { catalog[norm(`${t} ${a}`)] = { videoId: `x${i}`, title: t, artist: a }; });
 const byId = Object.fromEntries(Object.values(catalog).map((c) => [c.videoId, { title: c.title, artist: c.artist }]));
 
 const artistRun = (a) => ({ text: a, navigationEndpoint: { browseEndpoint: { browseEndpointContextSupportedConfigs: { browseEndpointContextMusicConfig: { pageType: 'MUSIC_PAGE_TYPE_ARTIST' } } } } });
@@ -50,7 +53,13 @@ let geminiShapeOk = true;
 const geminiModels = [];
 let aiCalls = [];
 let given = 0;
+let scripted = null; // when set, the next AI answer is exactly this list
 function nextSongs(count, payload) {
+  if (scripted) {
+    const s = scripted;
+    scripted = null;
+    return s.map(([title, artist]) => ({ title, artist, album: 'Some Album', reason: 'scripted' }));
+  }
   const out = [];
   while (out.length < count && given < POOL.length) {
     const [title, artist] = POOL[given++];
@@ -281,6 +290,33 @@ function check(name, cond, extra = '') { results.push([cond ? 'PASS' : 'FAIL', n
   await sleep(800);
   const ctl = await panel.evaluate(() => chrome.storage.local.get('controls').then((x) => x.controls));
   check('preset load restores controls', ctl.tempo === 50 && ctl.energy === 100, `tempo ${ctl.tempo} energy ${ctl.energy}`);
+
+  // ---- Same-artist rules: at most 1 per artist, never back-to-back (also not right after the current artist)
+  await panel.fill('#maxPerArtist', '1');
+  await panel.locator('#maxPerArtist').dispatchEvent('change');
+  check('back-to-back is off by default', !(await panel.locator('#allowBackToBack').isChecked()));
+  await sleep(2500);
+  await ytm.evaluate(() => window.__advance());
+  await sleep(500);
+  const nowArtist = (await panel.evaluate(() => chrome.storage.session.get('nowPlaying').then((x) => x.nowPlaying.artist)));
+  scripted = [
+    [ 'Smokin\'', 'Boston' ], ['Tush', 'ZZ Top'], ['Cheap Sunglasses', 'ZZ Top'], ['Jessica', 'The Allman Brothers Band'],
+    ['Melissa', 'The Allman Brothers Band'], ['Wish You Were Here', 'Pink Floyd'], ['Frankenstein', 'The Edgar Winter Group']
+  ];
+  // Put the artist playing now at the front of the script, so the rule has something to catch.
+  scripted.unshift(['Something Else', nowArtist]);
+  catalog[norm(`Something Else ${nowArtist}`)] = { videoId: 'xnow', title: 'Something Else', artist: nowArtist };
+  await ytm.evaluate((c) => { window.__catalog = c; }, { ...byId, xnow: { title: 'Something Else', artist: nowArtist } });
+  const callsSA = aiCalls.length;
+  await panel.click('#refresh');
+  s = await waitSteer((x) => x.status === 'ok' && aiCalls.length > callsSA && x.items.filter((i) => i.status === 'queued').length >= 3, 60000);
+  const sentRules = aiCalls[callsSA].controls.same_artist;
+  check('same-artist rules sent to the AI', sentRules.max_upcoming === 1 && sentRules.back_to_back_allowed === false, JSON.stringify(sentRules));
+  const upArtists = s.items.filter((i) => i.status === 'queued').map((i) => i.artist);
+  check('at most 1 song per artist in the upcoming steered songs', new Set(upArtists.map((a) => a.toLowerCase())).size === upArtists.length, upArtists.join(' | '));
+  const playingArtist = (s.items.find((i) => i.status === 'playing') || {}).artist || nowArtist;
+  check('first steered song is not by the artist playing now', upArtists[0] !== playingArtist, `${playingArtist} -> ${upArtists[0]}`);
+  check('vibe slider value sent', aiCalls[callsSA].controls.vibe && typeof aiCalls[callsSA].controls.vibe.value === 'number');
 
   // ---- Steering off stops touching the queue
   await panel.click('.switch');

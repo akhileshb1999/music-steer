@@ -216,3 +216,8 @@ button.thumb:hover { filter: none; opacity: 1; }
 .dislike-list { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .dislike-list li { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; align-items: center; }
 .dislike-list .who { overflow-wrap: anywhere; }
+
+.same-artist { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.same-artist input[type=number] { width: 52px; margin: 0 4px; }
+.same-artist .check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.same-artist input[type=checkbox] { accent-color: var(--accent); margin: 0; }

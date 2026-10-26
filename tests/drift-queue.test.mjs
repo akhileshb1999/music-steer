@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { interpolate, fadingOut, effectiveControls, nextDrift, sameDirection } from '../lib/drift.js';
-import { reconcile, addSkips } from '../lib/queue.js';
-import { DEFAULT_CONTROLS } from '../lib/state.js';
+import { reconcile, addSkips, spreadArtists } from '../lib/queue.js';
+import { DEFAULT_CONTROLS, artistKey } from '../lib/state.js';
 
 const C = (over = {}) => ({ ...structuredClone(DEFAULT_CONTROLS), ...over });
 
@@ -83,4 +83,24 @@ test('addSkips dedupes newest first and caps the list', () => {
   const s = addSkips([{ title: 'A', artist: 'X', why: 'removed' }], [{ title: 'a', artist: 'x' }, { title: 'B', artist: 'Y' }], 'not_found');
   assert.deepEqual(s.map((x) => [x.title, x.why]), [['a', 'not_found'], ['B', 'not_found']]);
   assert.equal(addSkips([], Array.from({ length: 80 }, (_, i) => ({ title: `t${i}`, artist: 'a' })), 'x').length, 50);
+});
+
+test('artistKey uses the main credited artist', () => {
+  assert.equal(artistKey('Queen, David Bowie'), 'queen');
+  assert.equal(artistKey('Santana feat. Rob Thomas'), 'santana');
+  assert.equal(artistKey('Simon & Garfunkel'), 'simon garfunkel');
+});
+
+test('spreadArtists keeps the same artist apart, starting after the previous song', () => {
+  const s = (title, artist) => ({ title, artist });
+  const r = spreadArtists([s('a1', 'A'), s('a2', 'A'), s('b1', 'B'), s('c1', 'C')], 'A');
+  assert.deepEqual(r.songs.map((x) => x.title), ['b1', 'a1', 'c1', 'a2']);
+  assert.deepEqual(r.dropped, []);
+  const stuck = spreadArtists([s('a1', 'A'), s('a2', 'A')], 'B');
+  assert.deepEqual(stuck.songs.map((x) => x.title), ['a1']);
+  assert.deepEqual(stuck.dropped.map((x) => x.title), ['a2']);
+});
+
+test('drift blends the vibe slider too', () => {
+  assert.equal(interpolate(C({ vibe: 0 }), C({ vibe: 100 }), 0.25).vibe, 25);
 });

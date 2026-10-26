@@ -28,6 +28,8 @@ The API key goes in **Options**: the link at the bottom of the panel, or right-c
 - **✕** on a song removes it from the queue. That song won't be picked again this session.
 - **👎** removes the song and adds it to **Disliked**. Every request tells the AI to avoid disliked songs, and songs like them, using the reason you type next to each one. 👎 on the now-playing card dislikes the current song.
 - **Drift: Snap** replaces the queued steered songs as soon as you change a control. **Gradual** keeps them and moves the picks from the old settings to the new ones over N songs: sliders, genre weights and era blend step by step, and artists, albums or steer text you removed fade out.
+- **Current vibe** (top of Tone): how much the picks stay close to what's playing. Low means your controls decide and the current song only shapes the first transition. High means picks stay near the current song's genre, mood and era, with your controls nudging. At 50 or more, any slider left at 50 means "match what's playing".
+- **Same artist** (in Artists): at most N songs by one artist among the upcoming steered songs (default 2), and whether the same artist may play twice in a row (off by default). Both are enforced in code, not just asked of the AI: extra songs by an artist are dropped, and new songs are ordered so no artist plays twice in a row, including right after the current song.
 - **Presets** save and load a full set of controls by name. Export/Import moves them between browsers as a JSON file.
 
 Songs you queued yourself and YouTube Music's autoplay suggestions are never touched. Steered songs are inserted ahead of them.
@@ -69,7 +71,7 @@ tests/                   unit tests (node --test) and an end-to-end test against
 - dislikes with their reasons, and songs skipped this session
 - the artists you know: play history, seed artists, and your YouTube Music library (followed artists and liked songs, refreshed daily)
 
-The reply is strict JSON (`{songs: [{title, artist, album, reason}]}`). Code then drops repeats, avoided artists and duplicates. The system prompt that explains each control to the model is in `lib/prompt.js`. Both providers get the same prompt and the same song-list format.
+The reply is strict JSON (`{songs: [{title, artist, album, reason}]}`). Code then drops repeats, avoided artists, artists over the same-artist limit and duplicates, and (unless back-to-back is allowed) orders the new songs so no artist plays twice in a row. The system prompt that explains each control to the model is in `lib/prompt.js`. Both providers get the same prompt and the same song-list format.
 
 **YouTube Music** has no public queue API. `content/ytm-adapter.js` uses the page's own internals, chosen as the parts least likely to change:
 - **Search:** the page's `youtubei/v1/search` endpoint. The "Songs" filter value is read from the result chips, never hard-coded.

@@ -48,6 +48,7 @@ const GENRE_SUGGESTIONS = [
 ];
 
 const SLIDERS = [
+  { key: 'vibe', name: 'Current vibe', left: 'Follow my controls', right: 'Stay close to what’s playing' },
   { key: 'energy', name: 'Energy', left: 'Calm', right: 'Intense' },
   { key: 'heaviness', name: 'Heaviness', left: 'Soft', right: 'Heavy' },
   { key: 'tempo', name: 'Tempo', left: 'Slow', right: 'Fast' },
@@ -216,6 +217,21 @@ $('seedAdd').addEventListener('submit', (e) => {
   renderSeeds();
 });
 
+// ---- Same-artist rules ------------------------------------------------------
+
+function renderSameArtist() {
+  $('maxPerArtist').value = controls.maxPerArtist;
+  $('allowBackToBack').checked = !!controls.allowBackToBack;
+}
+
+$('maxPerArtist').addEventListener('change', (e) => {
+  const n = Math.round(Number(e.target.value));
+  controls.maxPerArtist = Math.min(5, Math.max(1, Number.isFinite(n) ? n : DEFAULT_CONTROLS.maxPerArtist));
+  e.target.value = controls.maxPerArtist;
+  save();
+});
+$('allowBackToBack').addEventListener('change', (e) => { controls.allowBackToBack = e.target.checked; save(); });
+
 // ---- Albums -----------------------------------------------------------------
 
 function renderAlbums() {
@@ -283,6 +299,7 @@ function renderControls() {
   renderEra();
   renderSeeds();
   renderChips($('avoidArtists'), 'avoidArtists', 'Type an artist, press Enter');
+  renderSameArtist();
   renderAlbums();
   renderSteer();
 }

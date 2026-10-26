@@ -7,7 +7,7 @@ import {
 import { buildPayload, filterPicks } from './lib/prompt.js';
 import { requestPicks, keyFor, providerName } from './lib/llm.js';
 import { effectiveControls, nextDrift, sameDirection } from './lib/drift.js';
-import { reconcile, addSkips } from './lib/queue.js';
+import { reconcile, addSkips, spreadArtists } from './lib/queue.js';
 
 const CONTROLS_SETTLE_MS = 1500;          // wait for slider dragging / typing to settle
 const TRACK_SETTLE_MS = 2500;             // let the queue update after a song change
@@ -90,7 +90,7 @@ async function askModel({ count, queued, skip }) {
   });
   return filterPicks(songs, {
     nowPlaying, history, queued, disliked: dislikes, skipped: skip,
-    avoidArtists: eff.controls.avoidArtists, count: count + SPARE_PICKS
+    avoidArtists: eff.controls.avoidArtists, maxPerArtist: eff.controls.maxPerArtist, count: count + SPARE_PICKS
   });
 }
 
@@ -175,6 +175,19 @@ async function steer({ flush = false, manual = false } = {}) {
   }
   if (!(await getSteeringOn())) return;
 
+  // Same-artist rule: keep new songs apart from each other and from whatever plays just before them.
+  const controls = await getControls();
+  let spreadOut = [];
+  if (!controls.allowBackToBack) {
+    const before = ahead.length ? ahead[ahead.length - 1].artist : np.artist;
+    const spread = spreadArtists(found, before);
+    found.splice(0, found.length, ...spread.songs);
+    spreadOut = spread.dropped;
+  }
+  if (!found.length) {
+    throw new UserError('All the picks were by the artist playing now. Allow back-to-back in Artists, or press Refresh.');
+  }
+
   await setWorking('Adding to the queue…');
   let sequence = found;
   let stayed = [];
@@ -199,6 +212,7 @@ async function steer({ flush = false, manual = false } = {}) {
   }
   const notes = [];
   if (notFound.length) notes.push(`Not on YouTube Music: ${notFound.map((p) => `${p.title} (${p.artist})`).join(', ')}`);
+  if (spreadOut.length) notes.push(`Left out to avoid back-to-back artists: ${spreadOut.map((p) => `${p.title} (${p.artist})`).join(', ')}`);
   if (ok.size < sequence.length) notes.push(`${sequence.length - ok.size} song(s) couldn’t be added.`);
   await updateSteer({ items, status: 'ok', detail: '', error: null, note: notes.join(' · '), retryAt: 0, filledAt: now, diag: added.diagnostics || null });
 }

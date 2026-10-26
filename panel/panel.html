@@ -93,6 +93,12 @@
     </form>
     <div class="sub">Avoid</div>
     <div id="avoidArtists" class="chips"></div>
+    <div class="sub">Same artist</div>
+    <div class="same-artist">
+      <label>At most <input id="maxPerArtist" type="number" min="1" max="5" step="1" aria-label="Most songs by one artist in the upcoming steered songs"> in the upcoming songs</label>
+      <label class="check"><input id="allowBackToBack" type="checkbox"> Allow back-to-back</label>
+    </div>
+    <p class="hint muted">Pulling a whole album, or want a run of one artist? Raise the limit and allow back-to-back.</p>
   </details>
 
   <details>
