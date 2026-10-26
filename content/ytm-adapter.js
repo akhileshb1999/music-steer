@@ -337,11 +337,142 @@
     return items.filter((x, i) => i > selectedIndex && x.videoIds.includes(id)).length;
   }
 
+  // ---- Running queue commands --------------------------------------------------------
+  //
+  // YouTube Music's own "Play next" / "Remove from queue" menu entries run their command through the
+  // menu item's ytmusicServiceMenuItemBehavior.handleCommand(), which calls the queue service directly
+  // (POST /music/get_queue, then applies the returned commands). So that is the first route here.
+  // Menu items only exist once a menu has been opened, so if there are none yet, one queue row's menu
+  // is opened and closed again. Each route is checked against the real queue before trying the next,
+  // and the route that worked is remembered.
+
+  const MENU_BUTTON = 'ytmusic-menu-renderer yt-button-shape button, ytmusic-menu-renderer #button, ' +
+    'ytmusic-menu-renderer tp-yt-paper-icon-button, ytmusic-menu-renderer button';
+
   function serviceRequest(el, endpoint) {
     el.dispatchEvent(new CustomEvent('yt-action', {
       bubbles: true, composed: true,
       detail: { actionName: 'yt-service-request', optionalAction: false, args: [el, endpoint], returnValue: [] }
     }));
+  }
+
+  function behaviorOf(el) {
+    for (const holder of [el && el.inst, el && el.polymerController, el]) {
+      const b = holder && holder.ytmusicServiceMenuItemBehavior;
+      if (b && typeof b.handleCommand === 'function') return b;
+    }
+    return null;
+  }
+
+  function findMenuBehavior() {
+    for (const el of document.querySelectorAll('ytmusic-menu-service-item-renderer, ytmusic-multi-select-menu-bar')) {
+      const b = behaviorOf(el);
+      if (b) return b;
+    }
+    return null;
+  }
+
+  function visibleMenuItems() {
+    return [...document.querySelectorAll('ytmusic-menu-service-item-renderer')].filter((el) => el.offsetParent !== null);
+  }
+
+  function closeMenus() {
+    for (const d of document.querySelectorAll('tp-yt-iron-dropdown')) {
+      try { if (d.opened && typeof d.close === 'function') d.close(); } catch {}
+    }
+    const esc = { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true, composed: true };
+    (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', esc));
+  }
+
+  async function openRowMenu(row) {
+    const button = row && row.querySelector(MENU_BUTTON);
+    if (!button) return false;
+    button.click();
+    return waitFor(() => visibleMenuItems().length > 0, 2500);
+  }
+
+  function anyRow() {
+    const { rows, selectedIndex } = readQueue();
+    return rows[selectedIndex] || rows[0] || null;
+  }
+
+  async function menuBehavior() {
+    let b = findMenuBehavior();
+    if (b) return b;
+    if (await openRowMenu(anyRow())) b = findMenuBehavior();
+    closeMenus();
+    return b;
+  }
+
+  // Opens a row's menu and clicks the entry carrying `name`; for adds, the entry is pointed at our song first.
+  async function clickMenuEntry(row, name, endpoint) {
+    if (!(await openRowMenu(row))) { closeMenus(); return false; }
+    const entry = visibleMenuItems().find((el) => {
+      const d = dataOf(el);
+      return d && d.serviceEndpoint && d.serviceEndpoint[name] &&
+        (name !== 'queueAddEndpoint' || d.serviceEndpoint[name].queueInsertPosition === 'INSERT_AFTER_CURRENT_VIDEO');
+    });
+    if (!entry) { closeMenus(); return false; }
+    if (endpoint) {
+      for (const holder of [dataOf(entry), entry.inst && entry.inst.data]) {
+        if (holder && typeof holder === 'object') holder.serviceEndpoint = endpoint;
+      }
+    }
+    entry.click();
+    await sleep(100);
+    closeMenus();
+    return true;
+  }
+
+  // Runs one route. Returns false if the route couldn't even be attempted.
+  async function runRoute(route, endpoint, row) {
+    const name = Object.keys(endpoint)[0];
+    if (route === 'menu-behavior') {
+      const b = await menuBehavior();
+      if (!b) return false;
+      try { await b.handleCommand(endpoint); } catch {}
+      return true;
+    }
+    if (route === 'menu-click') {
+      return clickMenuEntry(row || anyRow(), name, name === 'queueAddEndpoint' ? endpoint : null);
+    }
+    if (route === 'service-request') {
+      const target = (row && rowItemElement(row)) || document.querySelector('ytmusic-app');
+      if (!target) return false;
+      serviceRequest(target, endpoint);
+      return true;
+    }
+    return false;
+  }
+
+  const ROUTES = ['menu-behavior', 'menu-click', 'service-request'];
+  const working = { add: null, remove: null };
+
+  // Tries routes until `done()` holds. Waits long enough per route that a slow network can't cause a duplicate.
+  async function runQueueCommand(kind, endpoint, done, row = null) {
+    const order = working[kind] ? [working[kind], ...ROUTES.filter((r) => r !== working[kind])] : ROUTES;
+    const attempts = [];
+    for (const route of order) {
+      let ran = false;
+      let error = null;
+      try { ran = await runRoute(route, endpoint, row); } catch (err) { error = String((err && err.message) || err); }
+      const ok = ran && ((await waitFor(done, 4000)) || (await waitFor(done, 3000)));
+      attempts.push({ route, ran, ok, error });
+      if (ok) { working[kind] = route; return { ok: true, attempts }; }
+    }
+    return { ok: false, attempts };
+  }
+
+  function diagnostics(attempts) {
+    const q = readQueue();
+    return {
+      attempts,
+      queue: { rows: q.rows.length, items: q.items.length, selectedIndex: q.selectedIndex, source: q.source },
+      menuItemsInPage: document.querySelectorAll('ytmusic-menu-service-item-renderer').length,
+      menuBehaviorFound: !!findMenuBehavior(),
+      rowHasMenuButton: !!(anyRow() && anyRow().querySelector(MENU_BUTTON)),
+      clientVersion: cfg('INNERTUBE_CLIENT_VERSION') || null
+    };
   }
 
   function playNextEndpoint(videoId) {
@@ -356,22 +487,17 @@
   // Inserts the songs right after the current one, in the given order (so it inserts back to front).
   async function playNext({ videoIds }) {
     const results = [];
+    let diag = null;
     for (const id of [...videoIds].reverse()) {
+      // If no route works for a song, the rest won't fare better: report them without trying.
+      if (diag) { results.unshift({ videoId: id, ok: false }); continue; }
       const before = upcomingCount(id);
-      const added = () => upcomingCount(id) > before;
-      let ok = false;
-      for (const sel of ['ytmusic-app', 'ytmusic-player-queue']) {
-        const target = document.querySelector(sel);
-        if (!target) continue;
-        serviceRequest(target, playNextEndpoint(id));
-        // Wait, then wait a little more before trying another route (a slow network must not cause a duplicate).
-        ok = (await waitFor(added, 4000)) || (await waitFor(added, 3000));
-        if (ok) break;
-      }
-      results.unshift({ videoId: id, ok });
-      if (ok) await sleep(150);
+      const r = await runQueueCommand('add', playNextEndpoint(id), () => upcomingCount(id) > before);
+      if (!r.ok) diag = diagnostics(r.attempts);
+      results.unshift({ videoId: id, ok: r.ok, route: r.ok ? working.add : null });
+      if (r.ok) await sleep(150);
     }
-    return results;
+    return { results, diagnostics: diag };
   }
 
   function menuEndpoint(renderer, name) {
@@ -383,48 +509,25 @@
     return null;
   }
 
-  // Fallback: open the row's own menu and click the entry that carries the endpoint (no label matching).
-  async function clickMenuEntry(rowEl, endpointName) {
-    const button = rowEl.querySelector('ytmusic-menu-renderer yt-button-shape button, ytmusic-menu-renderer #button, ytmusic-menu-renderer tp-yt-paper-icon-button, ytmusic-menu-renderer button');
-    if (!button) return false;
-    button.click();
-    let entry = null;
-    await waitFor(() => {
-      entry = [...document.querySelectorAll('ytmusic-menu-service-item-renderer')]
-        .find((el) => el.offsetParent !== null && dataOf(el) && dataOf(el).serviceEndpoint && dataOf(el).serviceEndpoint[endpointName]);
-      return !!entry;
-    }, 2000);
-    if (!entry) {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-      return false;
-    }
-    entry.click();
-    return true;
-  }
-
   // Removes the first upcoming occurrence of each video.
   async function remove({ videoIds }) {
     const results = [];
+    let diag = null;
     for (const id of videoIds) {
+      if (diag) { results.push({ videoId: id, ok: false }); continue; }
       const { items, selectedIndex, rows } = readQueue();
       const idx = items.findIndex((x, i) => i > selectedIndex && x.videoIds.includes(id));
       if (idx < 0) { results.push({ videoId: id, ok: true, already: true }); continue; }
-      const before = upcomingCount(id);
-      const gone = () => upcomingCount(id) < before;
-      let ok = false;
       const row = rows[idx];
-      if (row) {
-        const ep = menuEndpoint(primaryRenderer(dataOf(row)), 'removeFromQueueEndpoint') ||
-          menuEndpoint(primaryRenderer(dataOf(rowItemElement(row))), 'removeFromQueueEndpoint');
-        if (ep) {
-          serviceRequest(rowItemElement(row), { removeFromQueueEndpoint: ep.removeFromQueueEndpoint });
-          ok = await waitFor(gone, 3000);
-        }
-        if (!ok && await clickMenuEntry(row, 'removeFromQueueEndpoint')) ok = await waitFor(gone, 3000);
-      }
-      results.push({ videoId: id, ok });
+      const ep = row && (menuEndpoint(primaryRenderer(dataOf(row)), 'removeFromQueueEndpoint') ||
+        menuEndpoint(primaryRenderer(dataOf(rowItemElement(row))), 'removeFromQueueEndpoint'));
+      if (!ep) { results.push({ videoId: id, ok: false }); continue; }
+      const before = upcomingCount(id);
+      const r = await runQueueCommand('remove', { removeFromQueueEndpoint: ep.removeFromQueueEndpoint }, () => upcomingCount(id) < before, row);
+      if (!r.ok && !diag) diag = diagnostics(r.attempts);
+      results.push({ videoId: id, ok: r.ok });
     }
-    return results;
+    return { results, diagnostics: diag };
   }
 
   // ---- Library (for the discovery slider) ---------------------------------------------

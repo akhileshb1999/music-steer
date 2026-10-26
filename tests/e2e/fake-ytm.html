@@ -29,6 +29,25 @@ function renderer(r, sel) {
       { menuServiceItemRenderer: { text: { runs: [{ text: 'Remove from queue' }] }, serviceEndpoint: { removeFromQueueEndpoint: { videoId: r.videoId, itemId: r.itemId } } } }
     ] } } };
 }
+// MODE picks which route the fake app honours, like different YouTube Music builds:
+//   behavior (default, like the real page in late 2026): menu items' ytmusicServiceMenuItemBehavior.handleCommand
+//   click: menu items only work when clicked (no reachable behavior)
+//   event: only the 'yt-action' / 'yt-service-request' event works, and rows have no menu button
+//   broken: nothing works
+const MODE = new URLSearchParams(location.search).get('mode') || 'behavior';
+window.__routes = { behavior: 0, click: 0, event: 0 };
+function withMenu(el, d) {
+  el.data = d;
+  if (MODE !== 'event') {
+    const menu = document.createElement('ytmusic-menu-renderer');
+    const button = document.createElement('button');
+    button.id = 'button';
+    button.addEventListener('click', () => openMenu(d));
+    menu.appendChild(button);
+    el.appendChild(menu);
+  }
+  return el;
+}
 function render() {
   const q = document.getElementById('q');
   q.innerHTML = '';
@@ -38,10 +57,11 @@ function render() {
       const w = document.createElement('ytmusic-playlist-panel-video-wrapper-renderer');
       const counterpart = renderer({ ...r, videoId: r.videoId + '-video' }, false);
       w.data = { primaryRenderer: { playlistPanelVideoRenderer: d }, counterpart: [{ counterpartRenderer: { playlistPanelVideoRenderer: counterpart } }] };
-      for (const x of [d, counterpart]) { const el = document.createElement('ytmusic-player-queue-item'); el.data = x; w.appendChild(el); }
+      w.appendChild(withMenu(document.createElement('ytmusic-player-queue-item'), d));
+      const second = document.createElement('ytmusic-player-queue-item'); second.data = counterpart; w.appendChild(second);
       q.appendChild(w);
     } else {
-      const el = document.createElement('ytmusic-player-queue-item'); el.data = d; q.appendChild(el);
+      q.appendChild(withMenu(document.createElement('ytmusic-player-queue-item'), d));
     }
   });
   const cur = rows[selected];
@@ -53,11 +73,7 @@ function render() {
 document.getElementById('movie_player').getVideoData = () => ({ video_id: rows[selected].videoId, title: rows[selected].title });
 document.getElementById('q').getState = () => ({ queue: { items: rows.map(r => ({ playlistPanelVideoRenderer: renderer(r, false) })) } });
 window.__catalog = {};
-document.querySelector('ytmusic-app').addEventListener('yt-action', (e) => {
-  const d = e.detail;
-  if (!d || d.actionName !== 'yt-service-request') return;
-  const ep = d.args[1];
-  window.__events.push(Object.keys(ep)[0]);
+function apply(ep) {
   setTimeout(() => {
     if (ep.queueAddEndpoint) {
       const id = ep.queueAddEndpoint.queueTarget.videoId;
@@ -70,7 +86,47 @@ document.querySelector('ytmusic-app').addEventListener('yt-action', (e) => {
     }
     render();
   }, 300);
+}
+document.querySelector('ytmusic-app').addEventListener('yt-action', (e) => {
+  const d = e.detail;
+  if (MODE !== 'event' || !d || d.actionName !== 'yt-service-request') return;
+  window.__events.push(Object.keys(d.args[1])[0]);
+  window.__routes.event++;
+  apply(d.args[1]);
 });
+// Popup menu: created on first open (like the real app), position: fixed, reused afterwards.
+let dropdown = null;
+function openMenu(rowData) {
+  if (!dropdown) {
+    const container = document.createElement('ytmusic-popup-container');
+    dropdown = document.createElement('tp-yt-iron-dropdown');
+    dropdown.style.cssText = 'position:fixed;top:10px;left:10px;background:#eee';
+    dropdown.close = () => { dropdown.opened = false; dropdown.style.display = 'none'; };
+    container.appendChild(dropdown);
+    document.body.appendChild(container);
+  }
+  const popup = document.createElement('ytmusic-menu-popup-renderer');
+  for (const it of rowData.menu.menuRenderer.items) {
+    const item = document.createElement('ytmusic-menu-service-item-renderer');
+    item.textContent = it.menuServiceItemRenderer.text.runs[0].text;
+    item.data = structuredClone(it.menuServiceItemRenderer);
+    const handleCommand = async (ep) => {
+      if (MODE === 'broken') return;
+      window.__events.push(Object.keys(ep)[0]);
+      apply(ep);
+    };
+    if (MODE === 'behavior') item.inst = { ytmusicServiceMenuItemBehavior: { handleCommand: (ep) => { window.__routes.behavior++; return handleCommand(ep); } } };
+    item.addEventListener('click', () => {
+      if (MODE === 'click') window.__routes.click++;
+      if (MODE === 'click' || MODE === 'behavior') handleCommand(item.data.serviceEndpoint);
+      dropdown.close();
+    });
+    popup.appendChild(item);
+  }
+  dropdown.replaceChildren(popup);
+  dropdown.opened = true;
+  dropdown.style.display = 'block';
+}
 window.__advance = () => { selected = Math.min(rows.length - 1, selected + 1); render(); };
 window.__queue = () => rows.map((r, i) => (i === selected ? '*' : '') + r.videoId);
 render();

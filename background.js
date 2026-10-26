@@ -123,8 +123,8 @@ async function steer({ flush = false, manual = false } = {}) {
   let ahead = items.filter((i) => i.status === 'queued');
   if (flush && ahead.length) {
     await setWorking('Clearing the old picks…');
-    const res = await ytm('remove', { videoIds: ahead.map((a) => a.videoId) }, 30000);
-    const out = new Set(res.filter((r) => r.ok).map((r) => r.videoId));
+    const res = await ytm('remove', { videoIds: ahead.map((a) => a.videoId) }, 60000);
+    const out = new Set(res.results.filter((r) => r.ok).map((r) => r.videoId));
     items = items.filter((i) => !(i.status === 'queued' && out.has(i.videoId)));
     ahead = items.filter((i) => i.status === 'queued');
     await updateSteer({ items });
@@ -179,13 +179,13 @@ async function steer({ flush = false, manual = false } = {}) {
   let sequence = found;
   let stayed = [];
   if (ahead.length) {
-    const res = await ytm('remove', { videoIds: ahead.map((a) => a.videoId) }, 30000);
-    const out = new Set(res.filter((r) => r.ok).map((r) => r.videoId));
+    const res = await ytm('remove', { videoIds: ahead.map((a) => a.videoId) }, 60000);
+    const out = new Set(res.results.filter((r) => r.ok).map((r) => r.videoId));
     sequence = [...ahead.filter((a) => out.has(a.videoId)), ...found];
     stayed = ahead.filter((a) => !out.has(a.videoId));
   }
   const added = await ytm('playNext', { videoIds: sequence.map((s) => s.videoId) }, 150000);
-  const ok = new Set(added.filter((r) => r.ok).map((r) => r.videoId));
+  const ok = new Set(added.results.filter((r) => r.ok).map((r) => r.videoId));
   const now = Date.now();
   items = [
     ...items.filter((i) => i.status === 'playing'),
@@ -194,13 +194,13 @@ async function steer({ flush = false, manual = false } = {}) {
   ];
 
   if (!ok.size) {
-    await updateSteer({ items, retryAt: now + RETRY_AFTER_QUEUE_BROKEN_MS });
+    await updateSteer({ items, retryAt: now + RETRY_AFTER_QUEUE_BROKEN_MS, diag: added.diagnostics || null });
     throw new UserError('Couldn’t add songs to the YouTube Music queue (YouTube may have changed something). Press Refresh to try again.');
   }
   const notes = [];
   if (notFound.length) notes.push(`Not on YouTube Music: ${notFound.map((p) => `${p.title} (${p.artist})`).join(', ')}`);
   if (ok.size < sequence.length) notes.push(`${sequence.length - ok.size} song(s) couldn’t be added.`);
-  await updateSteer({ items, status: 'ok', detail: '', error: null, note: notes.join(' · '), retryAt: 0, filledAt: now });
+  await updateSteer({ items, status: 'ok', detail: '', error: null, note: notes.join(' · '), retryAt: 0, filledAt: now, diag: added.diagnostics || null });
 }
 
 // ---- One thing at a time -------------------------------------------------------------------
@@ -264,9 +264,13 @@ async function removeSteered(videoId, { dislike = false } = {}) {
   if (dislike && item) await addDislike(item);
   if (item && item.status === 'queued') {
     try {
-      await ytm('remove', { videoIds: [videoId] }, 30000);
+      const res = await ytm('remove', { videoIds: [videoId] }, 60000);
+      if (!res.results[0].ok) {
+        await updateSteer({ status: 'error', error: 'Couldn’t remove that song from the YouTube Music queue.', diag: res.diagnostics || null });
+        return;
+      }
     } catch (err) {
-      await updateSteer({ error: err.message });
+      await updateSteer({ status: 'error', error: err.message });
       return;
     }
   }

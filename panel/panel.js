@@ -463,6 +463,7 @@ function renderSteered() {
   if (!steer.items.length && steeringOn && steer.status !== 'working') {
     $('steerList').append(h('li', { class: 'empty-msg' }, 'No steered songs queued yet.'));
   }
+  $('copyDiag').hidden = !(steer.status === 'error' && steer.diag);
   $('steerNote').hidden = !steer.note;
   $('steerNote').textContent = steer.note || '';
 }
@@ -477,6 +478,21 @@ async function renderCallInfo() {
   if (library && library.artists && library.artists.length) parts.push(`${library.artists.length} library artists known`);
   $('callInfo').textContent = parts.join(' · ');
 }
+
+$('copyDiag').addEventListener('click', async () => {
+  const report = {
+    version: chrome.runtime.getManifest().version,
+    error: steer.error,
+    diagnostics: steer.diag
+  };
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(report));
+    $('copyDiag').textContent = 'Copied. Paste it in the chat.';
+  } catch {
+    $('copyDiag').textContent = 'Couldn’t copy. Try again.';
+  }
+  setTimeout(() => { $('copyDiag').textContent = 'Copy details for troubleshooting'; }, 3000);
+});
 
 $('refresh').addEventListener('click', async () => {
   if (!steeringOn) await setSteeringOn(true);

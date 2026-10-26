@@ -73,8 +73,7 @@ The reply is strict JSON (`{songs: [{title, artist, album, reason}]}`). Code the
 
 **YouTube Music** has no public queue API. `content/ytm-adapter.js` uses the page's own internals, chosen as the parts least likely to change:
 - **Search:** the page's `youtubei/v1/search` endpoint. The "Songs" filter value is read from the result chips, never hard-coded.
-- **Play next:** the same `queueAddEndpoint` command the "Play next" menu item carries, handed to the app through its own `yt-action` event.
-- **Remove:** each queue item's own `removeFromQueueEndpoint`, with clicking its menu entry as a fallback.
+- **Play next / Remove:** the same `queueAddEndpoint` / `removeFromQueueEndpoint` commands the menu entries carry, run the way a menu entry runs them: through a menu item's `ytmusicServiceMenuItemBehavior.handleCommand()`. If no menu item exists yet, one queue row's menu is opened and closed once. Fallbacks, in order: clicking a real menu entry, then the app's `yt-action` / `yt-service-request` event. Each route is checked against the real queue before the next is tried, and the one that works is remembered.
 - **Library:** `youtubei/v1/browse`, signed the same way the page signs its own requests.
 
 When YouTube changes something, that file is the only one to fix.
@@ -86,7 +85,7 @@ When YouTube changes something, that file is the only one to fix.
 The status line in the "Up next" card says what went wrong.
 
 - **"Couldn't read the YouTube Music queue"**: click the player bar once to open the full player, then press Refresh.
-- **"Couldn't add songs to the YouTube Music queue"**: YouTube probably changed something. Automatic retries pause for 30 minutes (Refresh retries now). Run `tools/probe.js` (below) and look at the `playNext` section.
+- **"Couldn't add songs to the YouTube Music queue"**: YouTube probably changed something. Automatic retries pause for 30 minutes (Refresh retries now). Press **Copy details for troubleshooting** under the message: it copies which routes were tried and what the queue looked like, which is what's needed to fix `content/ytm-adapter.js`.
 - **"Gemini is busy right now"**: every free Gemini model was overloaded at that moment. These spikes are usually short, and steering retries every minute on its own.
 - **"Can't reach the YouTube Music tab"**: reload the tab. This happens after the extension is reloaded or updated.
 - Only one YouTube Music tab should be open while steering.
@@ -99,6 +98,7 @@ The status line in the "Up next" card says what went wrong.
 node --test                 # unit tests, no dependencies
 node tests/e2e/run.js       # end-to-end with Gemini; needs Playwright + Chromium
 PROVIDER=anthropic node tests/e2e/run.js
+MODE=click|event|broken node tests/e2e/run.js   # other queue routes, and the all-routes-fail path
 ```
 
 The end-to-end test loads the real extension against `tests/e2e/fake-ytm.html` with the AI provider mocked. It checks filling, ordering, top-ups, ✕, 👎, snap and gradual changes, presets, and steering off.

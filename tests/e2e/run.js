@@ -4,6 +4,7 @@
 // Needs Playwright with Chromium (npm i -D playwright && npx playwright install chromium).
 // Run from the repo root:  node tests/e2e/run.js            (Gemini, the default provider)
 //                          PROVIDER=anthropic node tests/e2e/run.js
+//                          MODE=click|event|broken node tests/e2e/run.js   (which queue route the fake page honours)
 const { chromium } = require('playwright');
 const fs = require('fs');
 const os = require('os');
@@ -12,6 +13,7 @@ const EXT = path.resolve(__dirname, '../..');
 const DIR = __dirname;
 const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'music-steer-e2e-'));
 const PROVIDER = process.env.PROVIDER === 'anthropic' ? 'anthropic' : 'gemini';
+const MODE = ['click', 'event', 'broken'].includes(process.env.MODE) ? process.env.MODE : 'behavior';
 const FAKE = fs.readFileSync(DIR + '/fake-ytm.html', 'utf8');
 const norm = (s) => (s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 
@@ -129,7 +131,7 @@ function check(name, cond, extra = '') { results.push([cond ? 'PASS' : 'FAIL', n
 
   const ytm = await ctx.newPage();
   ytm.on('pageerror', (e) => errors.push('ytm: ' + e.message));
-  await ytm.goto('https://music.youtube.com/watch?v=cur0');
+  await ytm.goto(`https://music.youtube.com/watch?v=cur0&mode=${MODE}`);
   await ytm.evaluate((c) => { window.__catalog = c; }, byId);
 
   const panel = await ctx.newPage();
@@ -156,6 +158,22 @@ function check(name, cond, extra = '') { results.push([cond ? 'PASS' : 'FAIL', n
   await panel.evaluate((provider) => chrome.storage.local.set({ provider, apiKey: 'sk-ant-test', geminiKey: 'AIzaTEST', controls: { genres: [{ name: 'hard rock', weight: 70 }, { name: 'blues rock', weight: 30 }], avoidArtists: ['Queen'], energy: 70 } }), PROVIDER);
   await sleep(2000); // let the controls change settle (steering still off)
   await panel.click('.switch');
+
+  if (MODE === 'broken') {
+    const b = await waitSteer((x) => x.status === 'error', 90000);
+    check('broken queue: clear error shown', /Couldn’t add songs/.test(b.error || ''), b.error);
+    check('broken queue: all three routes tried and reported', b.diag && b.diag.attempts.map((a) => a.route).join() === 'menu-behavior,menu-click,service-request', JSON.stringify(b.diag && b.diag.attempts));
+    check('broken queue: no songs added', (await queue()).length === 5);
+    check('broken queue: "Copy details" button shown', !(await panel.locator('#copyDiag').isHidden()));
+    check('broken queue: fails fast (one song tried, not every song)', (await ytm.evaluate(() => window.__events.length)) === 0);
+    check('no page errors', errors.length === 0, errors.join(' | '));
+    const failures = results.filter((r) => r[0] === 'FAIL').length;
+    console.log(failures, 'failures');
+    await ctx.close();
+    fs.rmSync(PROFILE, { recursive: true, force: true });
+    process.exit(failures ? 1 : 0);
+  }
+
   let s = await waitSteer((x) => x.status === 'ok' && x.items && x.items.length >= 5);
   let q = await queue();
   console.log('queue:', q.join(' '));
@@ -185,6 +203,9 @@ function check(name, cond, extra = '') { results.push([cond ? 'PASS' : 'FAIL', n
   check('older picks stay first after top-up', JSON.stringify(up.slice(0, 2)) === JSON.stringify(steeredIds.slice(3, 5)), up.join(' '));
   check('user items still after steered', JSON.stringify(up.slice(5)) === JSON.stringify(['user1', 'auto1', 'auto2']), up.join(' '));
   check('no duplicate rows', new Set(q.map((x) => x.replace('*', ''))).size === q.length);
+  const routes = await ytm.evaluate(() => window.__routes);
+  const expectRoute = { behavior: 'behavior', click: 'click', event: 'event' }[MODE];
+  check(`queue commands went through the ${MODE} route`, routes[expectRoute] > 0 && Object.entries(routes).every(([k, v]) => k === expectRoute || v === 0), JSON.stringify(routes));
   check('already queued sent to Claude', aiCalls[aiCalls.length - 1].already_queued.length === 2);
 
   // ---- Remove one with X
