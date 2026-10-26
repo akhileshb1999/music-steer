@@ -1,11 +1,11 @@
 import {
   CALLS_PER_HOUR, MIN_AHEAD, TARGET_AHEAD, STALE_AFTER_MS,
-  addToHistory, getApiKey, getControls, getHistory, getNowPlaying, getSteeringOn,
+  addToHistory, getAiSettings, getControls, getHistory, getNowPlaying, getSteeringOn,
   getRecentCalls, recordCall, getSteer, updateSteer, getDislikes, addDislike,
   getLibrary, setLibrary
 } from './lib/state.js';
 import { buildPayload, filterPicks } from './lib/prompt.js';
-import { requestPicks } from './lib/anthropic.js';
+import { requestPicks, keyFor, providerName } from './lib/llm.js';
 import { effectiveControls, nextDrift, sameDirection } from './lib/drift.js';
 import { reconcile, addSkips } from './lib/queue.js';
 
@@ -64,15 +64,15 @@ async function refreshLibrary() {
   }
 }
 
-// ---- Asking Claude -----------------------------------------------------------------------
+// ---- Asking the AI (Gemini or Claude, set in Options) --------------------------------------
 
-async function askClaude({ count, queued, skip }) {
-  const apiKey = await getApiKey();
-  if (!apiKey) throw new UserError('Add your Anthropic API key in Options.');
+async function askModel({ count, queued, skip }) {
+  const ai = await getAiSettings();
+  if (!keyFor(ai)) throw new UserError(`Add your ${providerName(ai)} API key in Options.`);
   const calls = await getRecentCalls();
   if (calls.length >= CALLS_PER_HOUR) {
     const mins = Math.ceil((calls[0] + 3600000 - Date.now()) / 60000);
-    throw new UserError(`Hourly limit reached (${CALLS_PER_HOUR} Claude calls). Steering resumes in ${mins} min.`);
+    throw new UserError(`Hourly limit reached (${CALLS_PER_HOUR} AI calls). Steering resumes in ${mins} min.`);
   }
   const [controls, history, nowPlaying, dislikes, library, { drift }] = await Promise.all([
     getControls(), getHistory(), getNowPlaying(), getDislikes(), getLibrary(), chrome.storage.local.get('drift')
@@ -83,9 +83,9 @@ async function askClaude({ count, queued, skip }) {
     skipped: skip, libraryArtists: (library && library.artists) || [], count: count + SPARE_PICKS
   });
   await recordCall();
-  const { songs, usage } = await requestPicks(apiKey, payload);
+  const { songs, usage } = await requestPicks(ai, payload);
   await updateSteer({
-    usage: usage ? { input: usage.input_tokens, output: usage.output_tokens } : null,
+    usage: usage || null,
     drift: eff.drift ? { step: eff.drift.step, of: eff.drift.of } : null
   });
   return filterPicks(songs, {
@@ -98,7 +98,7 @@ async function askClaude({ count, queued, skip }) {
 //
 // 1. Read the queue and see which steered songs are playing / still waiting.
 // 2. flush (snap change or Refresh): take the waiting steered songs out.
-// 3. If fewer than MIN_AHEAD are waiting, ask Claude for enough to get back to TARGET_AHEAD,
+// 3. If fewer than MIN_AHEAD are waiting, ask the AI for enough to get back to TARGET_AHEAD,
 //    find each on YouTube Music, and queue them right after the current song.
 //
 // "Play next" only inserts right after the current song, so to keep the order (older picks first)
@@ -147,8 +147,9 @@ async function steer({ flush = false, manual = false } = {}) {
   const notFound = [];
   let searchError = null;
   for (let round = 0; round < 2 && found.length < need; round++) {
-    await setWorking(round ? 'Asking Claude for a few more…' : `Asking Claude for ${need} song${need > 1 ? 's' : ''}…`);
-    const picks = await askClaude({ count: need - found.length, queued: [...ahead, ...found], skip: addSkips(skip, notFound, 'not_found') });
+    const who = providerName(await getAiSettings());
+    await setWorking(round ? `Asking ${who} for a few more…` : `Asking ${who} for ${need} song${need > 1 ? 's' : ''}…`);
+    const picks = await askModel({ count: need - found.length, queued: [...ahead, ...found], skip: addSkips(skip, notFound, 'not_found') });
     await setWorking('Finding them on YouTube Music…');
     for (const p of picks) {
       if (found.length >= need) break;
@@ -170,7 +171,7 @@ async function steer({ flush = false, manual = false } = {}) {
   await updateSteer({ skip });
   if (!found.length) {
     if (searchError) throw searchError;
-    throw new UserError('None of Claude’s picks could be found on YouTube Music. Try again, or loosen the controls.');
+    throw new UserError('None of the picks could be found on YouTube Music. Try again, or loosen the controls.');
   }
   if (!(await getSteeringOn())) return;
 
@@ -226,7 +227,7 @@ function enqueue(kind, fn) {
 async function pump() {
   if (busy) return;
   busy = true;
-  // Long passes (Claude call + searches + inserts) mustn't let the service worker go idle.
+  // Long passes (AI call + searches + inserts) mustn't let the service worker go idle.
   const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 20000);
   try {
     while (tasks.length) {

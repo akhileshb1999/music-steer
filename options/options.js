@@ -1,42 +1,71 @@
-import { getApiKey, setApiKey } from '../lib/state.js';
-import { testKey, MODEL } from '../lib/anthropic.js';
+import { getAiSettings, setAiSettings } from '../lib/state.js';
+import { testKey, providerName } from '../lib/llm.js';
+import { DEFAULT_GEMINI_MODEL } from '../lib/gemini.js';
+import { MODEL as CLAUDE_MODEL } from '../lib/anthropic.js';
 
-const keyInput = document.getElementById('key');
-const status = document.getElementById('status');
+const $ = (id) => document.getElementById(id);
 
 function setStatus(msg, kind = '') {
-  status.textContent = msg;
-  status.className = `status ${kind}`;
+  $('status').textContent = msg;
+  $('status').className = `status ${kind}`;
 }
 
-keyInput.value = await getApiKey();
+const settings = await getAiSettings();
+$('geminiKey').value = settings.geminiKey;
+$('anthropicKey').value = settings.apiKey;
+$('geminiModel').value = settings.geminiModel;
+$('geminiModel').placeholder = DEFAULT_GEMINI_MODEL;
+document.querySelector(`input[name=provider][value=${settings.provider}]`).checked = true;
 
-document.getElementById('show').addEventListener('click', (e) => {
-  const hidden = keyInput.type === 'password';
-  keyInput.type = hidden ? 'text' : 'password';
-  e.target.textContent = hidden ? 'Hide' : 'Show';
-});
+function current() {
+  return {
+    provider: document.querySelector('input[name=provider]:checked').value,
+    geminiKey: $('geminiKey').value.trim(),
+    apiKey: $('anthropicKey').value.trim(),
+    geminiModel: $('geminiModel').value.trim()
+  };
+}
 
-document.getElementById('save').addEventListener('click', async () => {
-  await setApiKey(keyInput.value.trim());
-  setStatus(keyInput.value.trim() ? 'Saved.' : 'Saved (empty).', 'ok');
-});
+function showProvider() {
+  const p = current().provider;
+  $('geminiBox').hidden = p !== 'gemini';
+  $('anthropicBox').hidden = p !== 'anthropic';
+  setStatus('');
+}
 
-document.getElementById('clear').addEventListener('click', async () => {
-  keyInput.value = '';
-  await setApiKey('');
-  setStatus('Key removed.', 'ok');
-});
+let saveTimer = null;
+function save() {
+  clearTimeout(saveTimer);
+  $('saved').textContent = 'Saving…';
+  saveTimer = setTimeout(async () => {
+    await setAiSettings(current());
+    $('saved').textContent = 'Saved';
+  }, 300);
+}
 
-document.getElementById('test').addEventListener('click', async () => {
-  const key = keyInput.value.trim();
-  if (!key) return setStatus('Enter a key first.', 'error');
+document.querySelectorAll('input[name=provider]').forEach((r) => r.addEventListener('change', () => { showProvider(); save(); }));
+for (const id of ['geminiKey', 'anthropicKey', 'geminiModel']) $(id).addEventListener('input', save);
+
+document.querySelectorAll('button.show').forEach((b) => b.addEventListener('click', () => {
+  const input = $(b.dataset.for);
+  const hidden = input.type === 'password';
+  input.type = hidden ? 'text' : 'password';
+  b.textContent = hidden ? 'Hide' : 'Show';
+}));
+
+$('test').addEventListener('click', async () => {
+  const s = current();
+  const key = s.provider === 'anthropic' ? s.apiKey : s.geminiKey;
+  if (!key) return setStatus(`Paste your ${providerName(s)} API key first.`, 'error');
   setStatus('Testing…');
   try {
-    const r = await testKey(key);
-    if (r.ok) setStatus(`Key works and has access to ${MODEL}. Remember to Save.`, 'ok');
-    else setStatus(`Key test failed: ${r.message}`, 'error');
+    const r = await testKey(s);
+    const model = s.provider === 'anthropic' ? CLAUDE_MODEL : (s.geminiModel || DEFAULT_GEMINI_MODEL);
+    if (r.ok) setStatus(`Works: the key has access to ${model}. You're all set.`, 'ok');
+    else setStatus(`Test failed: ${r.message.replace(' Check it in Options.', '')}`, 'error');
   } catch (err) {
-    setStatus(`Could not reach api.anthropic.com: ${err.message}`, 'error');
+    setStatus(`Couldn't reach ${providerName(s)}: ${err.message}`, 'error');
   }
 });
+
+showProvider();

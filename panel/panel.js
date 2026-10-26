@@ -1,9 +1,10 @@
 import {
   DEFAULT_CONTROLS, STALE_AFTER_MS, CALLS_PER_HOUR,
-  getControls, setControls, getApiKey, getHistory, clearHistory, getNowPlaying, norm,
+  getControls, setControls, getAiSettings, getHistory, clearHistory, getNowPlaying, norm,
   getSteeringOn, setSteeringOn, getSteer, getRecentCalls, getLibrary,
   getDislikes, setDislikes, getPresets, setPresets
 } from '../lib/state.js';
+import { keyFor, providerName } from '../lib/llm.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -467,8 +468,8 @@ function renderSteered() {
 }
 
 async function renderCallInfo() {
-  const [calls, library] = await Promise.all([getRecentCalls(), getLibrary()]);
-  const parts = [`Claude calls this hour: ${calls.length}/${CALLS_PER_HOUR}`];
+  const [calls, library, ai] = await Promise.all([getRecentCalls(), getLibrary(), getAiSettings()]);
+  const parts = [`${providerName(ai)} calls this hour: ${calls.length}/${CALLS_PER_HOUR}`];
   if (steer.usage) parts.push(`last: ${steer.usage.input.toLocaleString()} in / ${steer.usage.output.toLocaleString()} out tokens`);
   if (library && library.artists && library.artists.length) parts.push(`${library.artists.length} library artists known`);
   $('callInfo').textContent = parts.join(' · ');
@@ -539,7 +540,11 @@ confirmClick($('clearHistory'), () => clearHistory());
 // ---- API key banner + options ------------------------------------------------
 
 async function renderKeyWarning() {
-  $('keyWarning').hidden = !!(await getApiKey());
+  const ai = await getAiSettings();
+  $('keyWarning').hidden = !!keyFor(ai);
+  $('keyWarningText').textContent = ai.provider === 'anthropic'
+    ? 'No Anthropic API key yet.'
+    : 'No AI key yet. Music Steer uses Google Gemini’s free tier: get a free key and paste it in';
 }
 for (const id of ['openOptions', 'openOptions2']) {
   $(id).addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
@@ -559,7 +564,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (area === 'local') {
     if (changes.history) renderHistory(changes.history.newValue || []);
-    if (changes.apiKey) renderKeyWarning();
+    if (changes.apiKey || changes.geminiKey || changes.provider) { renderKeyWarning(); renderCallInfo(); }
     if (changes.callLog || changes.library) renderCallInfo();
     if (changes.steeringOn) {
       steeringOn = !!changes.steeringOn.newValue;

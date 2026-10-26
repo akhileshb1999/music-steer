@@ -13,7 +13,7 @@
   </header>
 
   <div id="keyWarning" class="banner" hidden>
-    No Anthropic API key yet. <a href="#" id="openOptions2">Add it in Options</a>.
+    <span id="keyWarningText">No AI key yet.</span> <a href="#" id="openOptions2">Options</a>.
   </div>
 
   <section id="nowPlaying" class="card now">
@@ -124,7 +124,7 @@
 
   <details>
     <summary>Disliked <span id="dislikeCount" class="muted"></span></summary>
-    <p class="hint muted">Every request tells Claude to avoid these. Add a reason to steer away from songs like them too.</p>
+    <p class="hint muted">Every request tells the AI to avoid these. Add a reason to steer away from songs like them too.</p>
     <ul id="dislikeList" class="dislike-list"></ul>
     <button id="clearDislikes" type="button" class="ghost danger small">Clear all</button>
   </details>
